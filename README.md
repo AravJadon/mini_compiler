@@ -4,7 +4,7 @@ A complete 6-phase mini compiler implemented using **Lex** (Flex) and **Yacc** (
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 compiler_projecct/
@@ -27,7 +27,7 @@ compiler_projecct/
 
 ---
 
-## 🔧 Build & Run
+##  Build & Run
 
 ### Prerequisites
 - **Flex** (lex)
@@ -56,7 +56,7 @@ gcc -w -o compiler main.c symtab.c tac.c optimizer.c codegen.c lex.yy.c parser.t
 
 ---
 
-## 🏗️ Compilation Phases
+## Compilation Phases
 
 ### Phase 1 — Lexical Analysis (`lexer.l`)
 Tokenizes the source code into a stream of tokens. Each token is logged with its line number, type, and lexeme.
@@ -180,7 +180,7 @@ Translates optimized TAC into Simple RISC assembly (MIPS-like ISA).
 
 ---
 
-## 🧪 Supported Language Constructs (Toy-C)
+##  Supported Language Constructs (Toy-C)
 
 ```c
 int main() {
@@ -213,7 +213,7 @@ int main() {
 
 ---
 
-## 📊 Sample Output
+##  Sample Output
 
 Running `./compiler < test_simple.c` produces:
 
@@ -235,13 +235,15 @@ Compilation completed successfully.
 
 ---
 
-## 👤 Author
+##  Author
 
 **Abhas** — Roll No: 2301006
+**Arav** — Roll No: 2301042
+**Harshal** — Roll No: 2301089
 
 ---
 
-## 📝 Tools & Technologies
+##  Tools & Technologies
 
 - **Flex** (Lexer generator)
 - **Bison** (Parser generator)
