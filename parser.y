@@ -1,19 +1,5 @@
-/* ================================================================
- *  parser.y  —  PHASE 2: Syntax Analysis (Grammar Rules)
- *
- *  Features:
- *    - Verbose Bison error messages
- *    - Location tracking (%locations) for line:col in diagnostics
- *    - Contextual error recovery (not just generic "invalid statement")
- *    - Assignment-in-condition warning
- * ================================================================ */
 %code requires {
 #include "common.h"
-}
-
-%code provides {
-    /* Make token_readable available for custom error messages */
-    extern const char *token_readable(int tok);
 }
 
 %define parse.error verbose
@@ -55,7 +41,6 @@
 
 %%
 
-/* ── Top-Level ───────────────────────────────────────────── */
 program
     : external_list
     ;
@@ -98,16 +83,14 @@ param_decl
               log_sem_error(@2.first_line, @2.first_column,
                   "redefinition of '%s'", $2);
               SymEntry *prev = sym_find($2);
-              if (prev) {
+              if (prev)
                   emit_diagnostic("<stdin>", prev->decl_line, prev->decl_col,
                       "note", "previous definition of '%s' was here", $2);
-              }
           }
           free($2);
       }
     ;
 
-/* ── Statements ──────────────────────────────────────────── */
 compound_stmt
     : LBRACE stmt_list RBRACE
     | LBRACE stmt_list error RBRACE
@@ -158,18 +141,18 @@ non_if_stmt
           if (!sym_lookup($6)) {
               log_sem_error(@6.first_line, @6.first_column,
                   "use of undeclared identifier '%s'", $6);
+          } else {
+              sym_mark_init($6);
           }
           emit_text("param &%s", $6);
           emit_text("param %s", $3);
           emit_text("call scanf, 2");
-          free($6);
-          free($3);
+          free($6); free($3);
       }
     | SWITCH LPAREN aexpr RPAREN LBRACE case_list RBRACE
       { free_aattr($3); }
     | compound_stmt
     | SEMI
-    /* ── Error Recovery: missing semicolon ────────────────── */
     | decl_stmt error
       {
           log_syntax_error(@2.first_line, @2.first_column,
@@ -188,7 +171,6 @@ non_if_stmt
               "expected ';' after expression");
           yyerrok;
       }
-    /* ── Error Recovery: generic statement error ──────────── */
     | error SEMI
       {
           if (@1.first_line != last_syntax_error_line) {
@@ -226,7 +208,6 @@ case_stmt
     | DEFAULT COLON stmt_list
     ;
 
-/* ── If / While (Matched / Unmatched) ────────────────────── */
 matched_stmt
     : non_if_stmt
     | IF LPAREN bexpr RPAREN M matched_stmt N ELSE M matched_stmt
@@ -271,7 +252,7 @@ matched_stmt
           backpatch($7->falselist, nextinstr());
       }
     | FOR LPAREN decl_stmt SEMI M bexpr SEMI M rel_bool N RPAREN M matched_stmt
-      { /* basic for-loop stub */ }
+      { /* for loop stub */ }
     ;
 
 unmatched_stmt
@@ -294,7 +275,6 @@ unmatched_stmt
       }
     ;
 
-/* ── Declarations (Phase 3: Semantic checks) ─────────────── */
 decl_stmt
     : TYPE decl_items
     ;
@@ -311,10 +291,9 @@ decl_item
               log_sem_error(@1.first_line, @1.first_column,
                   "redefinition of '%s'", $1);
               SymEntry *prev = sym_find($1);
-              if (prev) {
+              if (prev)
                   emit_diagnostic("<stdin>", prev->decl_line, prev->decl_col,
                       "note", "previous definition of '%s' was here", $1);
-              }
           }
           free($1);
       }
@@ -324,17 +303,24 @@ decl_item
               log_sem_error(@1.first_line, @1.first_column,
                   "redefinition of '%s'", $1);
               SymEntry *prev = sym_find($1);
-              if (prev) {
+              if (prev)
                   emit_diagnostic("<stdin>", prev->decl_line, prev->decl_col,
                       "note", "previous definition of '%s' was here", $1);
-              }
           } else {
-              SymEntry *e = sym_find($1);
-              if (e) e->is_initialized = 1;
+              sym_mark_init($1);
           }
           emit_text("%s = %s", $1, $3->place);
-          free($1);
-          free_aattr($3);
+          free($1); free_aattr($3);
+      }
+    | ID ASSIGN STRING
+      {
+          if (sym_declare($1, @1.first_line, @1.first_column)) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "redefinition of '%s'", $1);
+          }
+          log_sem_error(@3.first_line, @3.first_column,
+              "incompatible types when initializing type 'int' using type 'char *'");
+          free($1); free($3);
       }
     | ID ASSIGN LPAREN rel_bool RPAREN
       {
@@ -342,13 +328,11 @@ decl_item
               log_sem_error(@1.first_line, @1.first_column,
                   "redefinition of '%s'", $1);
               SymEntry *prev = sym_find($1);
-              if (prev) {
+              if (prev)
                   emit_diagnostic("<stdin>", prev->decl_line, prev->decl_col,
                       "note", "previous definition of '%s' was here", $1);
-              }
           } else {
-              SymEntry *e = sym_find($1);
-              if (e) e->is_initialized = 1;
+              sym_mark_init($1);
           }
           emit_bool_assignment($1, $4);
           free($1);
@@ -359,13 +343,11 @@ decl_item
               log_sem_error(@1.first_line, @1.first_column,
                   "redefinition of '%s'", $1);
               SymEntry *prev = sym_find($1);
-              if (prev) {
+              if (prev)
                   emit_diagnostic("<stdin>", prev->decl_line, prev->decl_col,
                       "note", "previous definition of '%s' was here", $1);
-              }
           } else {
-              SymEntry *e = sym_find($1);
-              if (e) e->is_initialized = 1;
+              sym_mark_init($1);
           }
           IntList *tmp = $5->truelist;
           $5->truelist = $5->falselist;
@@ -375,7 +357,6 @@ decl_item
       }
     ;
 
-/* ── Assignments (Phase 3 + 4) ───────────────────────────── */
 assign_stmt
     : ID ASSIGN aexpr
       {
@@ -383,19 +364,25 @@ assign_stmt
               log_sem_error(@1.first_line, @1.first_column,
                   "use of undeclared identifier '%s'", $1);
           } else {
-              SymEntry *e = sym_find($1);
-              if (e) e->is_initialized = 1;
-              /* Detect self-assignment: x = x */
-              if (strcmp($1, $3->place) == 0) {
+              sym_mark_init($1);
+              if (strcmp($1, $3->place) == 0)
                   emit_diagnostic("<stdin>", @1.first_line, @1.first_column,
                       "warning",
                       "explicitly assigning value of variable '%s' to itself [-Wself-assign]",
                       $1);
-              }
           }
           emit_text("%s = %s", $1, $3->place);
-          free($1);
-          free_aattr($3);
+          free($1); free_aattr($3);
+      }
+    | ID ASSIGN STRING
+      {
+          if (!sym_lookup($1)) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "use of undeclared identifier '%s'", $1);
+          }
+          log_sem_error(@3.first_line, @3.first_column,
+              "incompatible types when assigning to type 'int' from type 'char *'");
+          free($1); free($3);
       }
     | ID ASSIGN LPAREN rel_bool RPAREN
       {
@@ -403,8 +390,7 @@ assign_stmt
               log_sem_error(@1.first_line, @1.first_column,
                   "use of undeclared identifier '%s'", $1);
           } else {
-              SymEntry *e = sym_find($1);
-              if (e) e->is_initialized = 1;
+              sym_mark_init($1);
           }
           emit_bool_assignment($1, $4);
           free($1);
@@ -415,8 +401,7 @@ assign_stmt
               log_sem_error(@1.first_line, @1.first_column,
                   "use of undeclared identifier '%s'", $1);
           } else {
-              SymEntry *e = sym_find($1);
-              if (e) e->is_initialized = 1;
+              sym_mark_init($1);
           }
           IntList *tmp = $5->truelist;
           $5->truelist = $5->falselist;
@@ -430,8 +415,8 @@ assign_stmt
               log_sem_error(@1.first_line, @1.first_column,
                   "use of undeclared identifier '%s'", $1);
           } else {
-              SymEntry *e = sym_find($1);
-              if (e) { e->is_initialized = 1; e->is_used = 1; }
+              sym_mark_used($1, @1.first_line, @1.first_column);
+              sym_mark_init($1);
           }
           emit_compound_assign($1, "+", $3);
           free($1); free_aattr($3);
@@ -442,8 +427,8 @@ assign_stmt
               log_sem_error(@1.first_line, @1.first_column,
                   "use of undeclared identifier '%s'", $1);
           } else {
-              SymEntry *e = sym_find($1);
-              if (e) { e->is_initialized = 1; e->is_used = 1; }
+              sym_mark_used($1, @1.first_line, @1.first_column);
+              sym_mark_init($1);
           }
           emit_compound_assign($1, "-", $3);
           free($1); free_aattr($3);
@@ -454,8 +439,8 @@ assign_stmt
               log_sem_error(@1.first_line, @1.first_column,
                   "use of undeclared identifier '%s'", $1);
           } else {
-              SymEntry *e = sym_find($1);
-              if (e) { e->is_initialized = 1; e->is_used = 1; }
+              sym_mark_used($1, @1.first_line, @1.first_column);
+              sym_mark_init($1);
           }
           emit_compound_assign($1, "*", $3);
           free($1); free_aattr($3);
@@ -466,8 +451,8 @@ assign_stmt
               log_sem_error(@1.first_line, @1.first_column,
                   "use of undeclared identifier '%s'", $1);
           } else {
-              SymEntry *e = sym_find($1);
-              if (e) { e->is_initialized = 1; e->is_used = 1; }
+              sym_mark_used($1, @1.first_line, @1.first_column);
+              sym_mark_init($1);
           }
           emit_compound_assign($1, "/", $3);
           free($1); free_aattr($3);
@@ -478,15 +463,14 @@ assign_stmt
               log_sem_error(@1.first_line, @1.first_column,
                   "use of undeclared identifier '%s'", $1);
           } else {
-              SymEntry *e = sym_find($1);
-              if (e) { e->is_initialized = 1; e->is_used = 1; }
+              sym_mark_used($1, @1.first_line, @1.first_column);
+              sym_mark_init($1);
           }
           emit_compound_assign($1, "%", $3);
           free($1); free_aattr($3);
       }
     ;
 
-/* ── Increment / Decrement ───────────────────────────────── */
 inc_stmt
     : ID INC
       {
@@ -494,8 +478,8 @@ inc_stmt
               log_sem_error(@1.first_line, @1.first_column,
                   "use of undeclared identifier '%s'", $1);
           } else {
-              SymEntry *e = sym_find($1);
-              if (e) { e->is_initialized = 1; e->is_used = 1; }
+              sym_mark_used($1, @1.first_line, @1.first_column);
+              sym_mark_init($1);
           }
           emit_incdec($1, 1); free($1);
       }
@@ -505,8 +489,8 @@ inc_stmt
               log_sem_error(@1.first_line, @1.first_column,
                   "use of undeclared identifier '%s'", $1);
           } else {
-              SymEntry *e = sym_find($1);
-              if (e) { e->is_initialized = 1; e->is_used = 1; }
+              sym_mark_used($1, @1.first_line, @1.first_column);
+              sym_mark_init($1);
           }
           emit_incdec($1, 0); free($1);
       }
@@ -516,8 +500,8 @@ inc_stmt
               log_sem_error(@2.first_line, @2.first_column,
                   "use of undeclared identifier '%s'", $2);
           } else {
-              SymEntry *e = sym_find($2);
-              if (e) { e->is_initialized = 1; e->is_used = 1; }
+              sym_mark_used($2, @2.first_line, @2.first_column);
+              sym_mark_init($2);
           }
           emit_incdec($2, 1); free($2);
       }
@@ -527,24 +511,21 @@ inc_stmt
               log_sem_error(@2.first_line, @2.first_column,
                   "use of undeclared identifier '%s'", $2);
           } else {
-              SymEntry *e = sym_find($2);
-              if (e) { e->is_initialized = 1; e->is_used = 1; }
+              sym_mark_used($2, @2.first_line, @2.first_column);
+              sym_mark_init($2);
           }
           emit_incdec($2, 0); free($2);
       }
     ;
 
-/* ── Return ──────────────────────────────────────────────── */
 return_stmt
     : RETURN             { emit_text("return"); }
     | RETURN aexpr       { emit_text("return"); free_aattr($2); }
     ;
 
-/* ── Markers for Backpatching ────────────────────────────── */
 M : /* empty */ { $$ = nextinstr(); } ;
 N : /* empty */ { $$ = makelist(emit_goto(-1)); } ;
 
-/* ── Boolean Expressions (Short-circuit) ─────────────────── */
 bexpr     : bor_expr { $$ = $1; } ;
 
 bor_expr
@@ -579,16 +560,15 @@ bprimary
               log_sem_error(@1.first_line, @1.first_column,
                   "use of undeclared identifier '%s'", $1);
           } else {
-              SymEntry *e = sym_find($1);
-              if (e) e->is_used = 1;
+              sym_mark_used($1, @1.first_line, @1.first_column);
           }
           $$ = emit_truthy($1); free($1);
       }
     | NUMBER
       { $$ = emit_truthy($1); free($1); }
-    /* ── Assignment-in-condition warning ──────────────────── */
     | ID ASSIGN aexpr
       {
+          /* someone wrote = instead of == inside a condition */
           emit_diagnostic("<stdin>", @2.first_line, @2.first_column,
               "warning",
               "suggest parentheses around assignment used as truth value [-Wparentheses]");
@@ -598,8 +578,7 @@ bprimary
               log_sem_error(@1.first_line, @1.first_column,
                   "use of undeclared identifier '%s'", $1);
           } else {
-              SymEntry *e = sym_find($1);
-              if (e) e->is_initialized = 1;
+              sym_mark_init($1);
           }
           emit_text("%s = %s", $1, $3->place);
           $$ = emit_truthy($1);
@@ -616,7 +595,6 @@ rel_bool
     | aexpr NE aexpr  { $$ = emit_relop($1->place, "!=", $3->place); free_aattr($1); free_aattr($3); }
     ;
 
-/* ── Arithmetic Expressions (Phase 4: TAC) ───────────────── */
 aexpr
     : aexpr PLUS term
       { char *t = new_temp(); emit_text("%s = %s + %s", t, $1->place, $3->place); $$ = make_aattr(t); free_aattr($1); free_aattr($3); }
@@ -645,8 +623,8 @@ factor
               log_sem_error(@2.first_line, @2.first_column,
                   "use of undeclared identifier '%s'", $2);
           } else {
-              SymEntry *e = sym_find($2);
-              if (e) { e->is_initialized = 1; e->is_used = 1; }
+              sym_mark_used($2, @2.first_line, @2.first_column);
+              sym_mark_init($2);
           }
           emit_incdec($2, 1); $$ = make_aattr($2);
       }
@@ -656,8 +634,8 @@ factor
               log_sem_error(@2.first_line, @2.first_column,
                   "use of undeclared identifier '%s'", $2);
           } else {
-              SymEntry *e = sym_find($2);
-              if (e) { e->is_initialized = 1; e->is_used = 1; }
+              sym_mark_used($2, @2.first_line, @2.first_column);
+              sym_mark_init($2);
           }
           emit_incdec($2, 0); $$ = make_aattr($2);
       }
@@ -674,8 +652,7 @@ factor
               log_sem_error(@1.first_line, @1.first_column,
                   "use of undeclared identifier '%s'", $1);
           } else {
-              SymEntry *e = sym_find($1);
-              if (e) e->is_used = 1;
+              sym_mark_used($1, @1.first_line, @1.first_column);
           }
           $$ = make_aattr($1);
       }

@@ -1,14 +1,10 @@
-/* ================================================================
- *  main.c  —  Driver: Phase Output + Error Logging + main()
- * ================================================================ */
 #include "common.h"
 #include "parser.tab.h"
 
-/* ── Global State ────────────────────────────────────────── */
 int had_errors = 0;
 int last_syntax_error_line = -1;
 
-/* ── Source Line Buffer ──────────────────────────────────── */
+/* source line buffer */
 char source_lines[MAX_SOURCE_LINES][MAX_LINE_LEN];
 int source_line_count = 0;
 int yycolno = 1;
@@ -21,7 +17,7 @@ void store_source_line(int lineno, const char *text) {
     }
 }
 
-/* ── Diagnostic Formatter (GCC-style) ────────────────────── */
+/* prints a diagnostic the way gcc does: file:line:col + source line + caret */
 void emit_diagnostic(const char *filename, int line, int col,
                      const char *severity, const char *fmt, ...) {
     va_list ap;
@@ -30,31 +26,24 @@ void emit_diagnostic(const char *filename, int line, int col,
     vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
 
-    /* file:line:col: severity: message */
     printf("  %s:%d:%d: %s: %s\n", filename, line, col, severity, msg);
 
-    /* Print the source line if available */
     if (line > 0 && line <= source_line_count && source_lines[line - 1][0] != '\0') {
         const char *src = source_lines[line - 1];
         int len = (int)strlen(src);
-        /* Remove trailing newline for clean display */
         int printlen = (len > 0 && src[len - 1] == '\n') ? len - 1 : len;
         printf("  %5d | %.*s\n", line, printlen, src);
-        /* Caret line */
         printf("        | ");
         int i;
-        for (i = 1; i < col && i <= printlen; i++) {
+        for (i = 1; i < col && i <= printlen; i++)
             printf("%c", (src[i - 1] == '\t') ? '\t' : ' ');
-        }
         printf("^\n");
     }
 }
 
-/* ── Token Log ───────────────────────────────────────────── */
+/* token + error logs */
 TokenEntry token_log[MAX_TOKENS];
 int token_count = 0;
-
-/* ── Error Logs ──────────────────────────────────────────── */
 ErrorEntry lex_errors[MAX_ERRORS];
 int lex_error_count = 0;
 ErrorEntry syntax_errors[MAX_ERRORS];
@@ -62,7 +51,6 @@ int syntax_error_count = 0;
 ErrorEntry sem_errors[MAX_ERRORS];
 int sem_error_count = 0;
 
-/* ── Logging Functions ───────────────────────────────────── */
 void log_token(int tok, const char *text, int line, int col) {
     if (token_count < MAX_TOKENS) {
         token_log[token_count].token = tok;
@@ -111,7 +99,7 @@ void log_sem_error(int line, int col, const char *fmt, ...) {
     had_errors = 1;
 }
 
-/* ── Token Name Mapping ──────────────────────────────────── */
+/* maps token enum to the short name used in the token table */
 static const char *token_name(int tok) {
     switch(tok) {
         case ID: return "ID";
@@ -166,63 +154,6 @@ static const char *token_name(int tok) {
     }
 }
 
-/* Human-readable token name for error messages */
-static const char *token_readable(int tok) {
-    switch(tok) {
-        case ID: return "identifier";
-        case NUMBER: return "numeric constant";
-        case STRING: return "string literal";
-        case TYPE: return "type specifier";
-        case IF: return "'if'";
-        case ELSE: return "'else'";
-        case RETURN: return "'return'";
-        case FOR: return "'for'";
-        case WHILE: return "'while'";
-        case DO: return "'do'";
-        case SWITCH: return "'switch'";
-        case CASE: return "'case'";
-        case DEFAULT: return "'default'";
-        case BREAK: return "'break'";
-        case CONTINUE: return "'continue'";
-        case PRINTF: return "'printf'";
-        case SCANF: return "'scanf'";
-        case AMPER: return "'&'";
-        case ASSIGN: return "'='";
-        case ADD_ASSIGN: return "'+='";
-        case SUB_ASSIGN: return "'-='";
-        case MUL_ASSIGN: return "'*='";
-        case DIV_ASSIGN: return "'/='";
-        case MOD_ASSIGN: return "'%='";
-        case PLUS: return "'+'";
-        case MINUS: return "'-'";
-        case MUL: return "'*'";
-        case DIV: return "'/'";
-        case MOD: return "'%'";
-        case LT: return "'<'";
-        case GT: return "'>'";
-        case LE: return "'<='";
-        case GE: return "'>='";
-        case EQ: return "'=='";
-        case NE: return "'!='";
-        case AND: return "'&&'";
-        case OR: return "'||'";
-        case NOT: return "'!'";
-        case INC: return "'++'";
-        case DEC: return "'--'";
-        case LPAREN: return "'('";
-        case RPAREN: return "')'";
-        case LBRACE: return "'{'";
-        case RBRACE: return "'}'";
-        case SEMI: return "';'";
-        case COMMA: return "','";
-        case COLON: return "':'";
-        case INVALID: return "invalid token";
-        case 0: return "end of input";
-        default: return "token";
-    }
-}
-
-/* ── Phase 1 Output ──────────────────────────────────────── */
 static void print_phase1(void) {
     int i;
     printf("============================================================\n");
@@ -240,17 +171,15 @@ static void print_phase1(void) {
     if (lex_error_count > 0) {
         int j;
         printf("\n  LEXICAL ERRORS:\n");
-        for (j = 0; j < lex_error_count; j++) {
+        for (j = 0; j < lex_error_count; j++)
             emit_diagnostic("<stdin>", lex_errors[j].line, lex_errors[j].col,
                             "error", "%s", lex_errors[j].message);
-        }
     } else {
         printf("  [OK] No lexical errors.\n");
     }
     printf("\n");
 }
 
-/* ── Phase 2 Output ──────────────────────────────────────── */
 static void print_phase2(void) {
     printf("============================================================\n");
     printf("       PHASE 2: SYNTAX ANALYSIS (Parsing)\n");
@@ -258,10 +187,9 @@ static void print_phase2(void) {
     if (syntax_error_count > 0) {
         int i;
         printf("  SYNTAX ERRORS:\n");
-        for (i = 0; i < syntax_error_count; i++) {
+        for (i = 0; i < syntax_error_count; i++)
             emit_diagnostic("<stdin>", syntax_errors[i].line, syntax_errors[i].col,
                             "error", "%s", syntax_errors[i].message);
-        }
     } else {
         printf("  [OK] Syntax analysis completed successfully.\n");
         printf("  The input program is syntactically valid.\n");
@@ -269,12 +197,12 @@ static void print_phase2(void) {
     printf("\n");
 }
 
-/* ── Phase 3 Output ──────────────────────────────────────── */
 static void print_phase3(void) {
     int i, found = 0;
     printf("============================================================\n");
     printf("       PHASE 3: SEMANTIC ANALYSIS\n");
     printf("============================================================\n\n");
+
     printf("  Symbol Table (Declared Variables):\n");
     printf("  %-20s %-6s %-10s %-6s %-6s\n", "Name", "Type", "Line:Col", "Init", "Used");
     printf("  %-20s %-6s %-10s %-6s %-6s\n", "----", "----", "--------", "----", "----");
@@ -284,7 +212,7 @@ static void print_phase3(void) {
             char loc[32];
             snprintf(loc, sizeof(loc), "%d:%d", e->decl_line, e->decl_col);
             printf("  %-20s %-6s %-10s %-6s %-6s\n",
-                e->name, "int", loc,
+                e->name, sym_type_str(e), loc,
                 e->is_initialized ? "yes" : "no",
                 e->is_used ? "yes" : "no");
             e = e->next;
@@ -296,28 +224,29 @@ static void print_phase3(void) {
 
     if (sem_error_count > 0) {
         int j;
-        printf("  SEMANTIC ERRORS / WARNINGS:\n");
-        for (j = 0; j < sem_error_count; j++) {
+        printf("  SEMANTIC ERRORS:\n");
+        for (j = 0; j < sem_error_count; j++)
             emit_diagnostic("<stdin>", sem_errors[j].line, sem_errors[j].col,
                             "error", "%s", sem_errors[j].message);
-        }
     } else {
         printf("  [OK] Semantic analysis completed successfully.\n");
         printf("  All variables declared before use. No duplicate declarations.\n");
     }
 
-    /* Post-compilation warnings: unused variables */
+    /* warn about variables that were never read */
     for (i = 0; i < SYM_SIZE; i++) {
         SymEntry *e = sym_table[i];
         while (e) {
-            if (!e->is_used && e->decl_line > 0) {
-                emit_diagnostic("<stdin>", e->decl_line, e->decl_col,
-                                "warning", "unused variable '%s' [-Wunused-variable]",
-                                e->name);
-            } else if (e->is_initialized && !e->is_used && e->decl_line > 0) {
-                emit_diagnostic("<stdin>", e->decl_line, e->decl_col,
-                                "warning", "variable '%s' set but not used [-Wunused-but-set-variable]",
-                                e->name);
+            if (e->decl_line > 0 && !e->is_used) {
+                if (e->is_initialized) {
+                    emit_diagnostic("<stdin>", e->decl_line, e->decl_col,
+                        "warning", "variable '%s' set but not used [-Wunused-but-set-variable]",
+                        e->name);
+                } else {
+                    emit_diagnostic("<stdin>", e->decl_line, e->decl_col,
+                        "warning", "unused variable '%s' [-Wunused-variable]",
+                        e->name);
+                }
             }
             e = e->next;
         }
@@ -325,7 +254,6 @@ static void print_phase3(void) {
     printf("\n");
 }
 
-/* ── Phase 4 Output ──────────────────────────────────────── */
 static void print_phase4(void) {
     printf("============================================================\n");
     printf("       PHASE 4: INTERMEDIATE CODE (Three Address Code)\n");
@@ -336,7 +264,6 @@ static void print_phase4(void) {
     printf("\n  Total TAC instructions: %d\n\n", code_len);
 }
 
-/* ── Phase 5 Output ──────────────────────────────────────── */
 static void print_phase5(void) {
     printf("============================================================\n");
     printf("       PHASE 5: OPTIMIZATION\n");
@@ -357,7 +284,6 @@ static void print_phase5(void) {
     printf("\n");
 }
 
-/* ── Phase 6 Output ──────────────────────────────────────── */
 static void print_phase6(void) {
     printf("============================================================\n");
     printf("       PHASE 6: TARGET CODE GENERATION (Assembly)\n");
@@ -373,12 +299,10 @@ static void print_phase6(void) {
     printf("\n");
 }
 
-/* ── Parser Callbacks ────────────────────────────────────── */
+/* bison calls this on parse errors */
 void yyerror(const char *s) {
-    /* Bison calls this with verbose error string when %define parse.error verbose is set */
     if (yylineno != last_syntax_error_line) {
         log_syntax_error(yylineno, yycolno, "%s", s);
-        /* Also emit immediately so user sees it during parse */
         emit_diagnostic("<stdin>", yylineno, yycolno, "error", "%s", s);
         last_syntax_error_line = yylineno;
     }
@@ -389,7 +313,6 @@ void report_lex_error(const char *bad, int col) {
     log_lex_error(yylineno, col, "stray '%s' in program", bad);
 }
 
-/* ── Main Entry Point ────────────────────────────────────── */
 int main(void) {
     printf("\n");
     printf("************************************************************\n");
