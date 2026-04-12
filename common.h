@@ -119,6 +119,12 @@ extern int stat_const_fold;
 extern int stat_const_prop;
 extern int stat_cse;
 extern int stat_dead_elim;
+extern int stat_algebraic;
+extern int stat_copy_prop;
+extern int stat_strength_red;
+extern int stat_global_const;
+extern int stat_loop_inv;
+extern int stat_unreachable;
 
 void optimize(void);
 void print_opt_tac(void);

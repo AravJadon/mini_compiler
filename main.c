@@ -273,12 +273,19 @@ static void print_phase5(void) {
 
     optimize();
 
-    printf("  Optimizations applied:\n");
+    printf("  Local optimizations:\n");
     printf("    - Constant Folding:         %d\n", stat_const_fold);
+    printf("    - Algebraic Simplification: %d\n", stat_algebraic);
+    printf("    - Strength Reduction:       %d\n", stat_strength_red);
     printf("    - Constant Propagation:     %d\n", stat_const_prop);
+    printf("    - Copy Propagation:         %d\n", stat_copy_prop);
     printf("    - Common Sub-Expression:    %d\n", stat_cse);
     printf("    - Dead Code Elimination:    %d\n", stat_dead_elim);
-    printf("    - Instructions removed:     %d\n", code_len - opt_len);
+    printf("\n  Global optimizations:\n");
+    printf("    - Global Const Propagation: %d\n", stat_global_const);
+    printf("    - Loop-Invariant Motion:    %d\n", stat_loop_inv);
+    printf("    - Unreachable Code Removal: %d\n", stat_unreachable);
+    printf("\n    Total instructions removed: %d\n", code_len - opt_len);
     printf("\n  Optimized TAC (%d instructions):\n\n", opt_len);
     print_opt_tac();
     printf("\n");
