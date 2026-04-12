@@ -1,18 +1,13 @@
-/* ================================================================
- *  tac.c  —  PHASE 4: Three Address Code Generation
- * ================================================================ */
 #include "common.h"
 
-/* ── Globals ─────────────────────────────────────────────── */
 Instruction code_buf[MAX_CODE];
 int code_len = 0;
 int temp_count = 1;
 
-/* ── Utility Functions ───────────────────────────────────── */
 char *xstrdup(const char *s) {
     size_t n = strlen(s) + 1;
     char *p = (char *)malloc(n);
-    if (!p) { fprintf(stderr, "Out of memory.\n"); exit(1); }
+    if (!p) { fprintf(stderr, "out of memory\n"); exit(1); }
     memcpy(p, s, n);
     return p;
 }
@@ -26,7 +21,6 @@ char *mkstr(const char *fmt, ...) {
     return xstrdup(buf);
 }
 
-/* ── Attribute Constructors ──────────────────────────────── */
 AAttr *make_aattr(char *place) {
     AAttr *a = (AAttr *)malloc(sizeof(AAttr));
     a->place = place;
@@ -46,14 +40,13 @@ void free_aattr(AAttr *a) {
     free(a);
 }
 
-/* ── Code Emission ───────────────────────────────────────── */
 int nextinstr(void) { return code_len; }
 int line_of(int idx) { return 100 + idx; }
 
 int emit_text(const char *fmt, ...) {
     char buf[256];
     va_list ap;
-    if (code_len >= MAX_CODE) { fprintf(stderr, "Too many TAC instructions.\n"); exit(1); }
+    if (code_len >= MAX_CODE) { fprintf(stderr, "too many TAC instructions\n"); exit(1); }
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
@@ -65,7 +58,7 @@ int emit_text(const char *fmt, ...) {
 }
 
 int emit_if(const char *cond) {
-    if (code_len >= MAX_CODE) { fprintf(stderr, "Too many TAC instructions.\n"); exit(1); }
+    if (code_len >= MAX_CODE) { fprintf(stderr, "too many TAC instructions\n"); exit(1); }
     code_buf[code_len].type = INS_IF;
     strncpy(code_buf[code_len].text, cond, sizeof(code_buf[code_len].text) - 1);
     code_buf[code_len].text[sizeof(code_buf[code_len].text) - 1] = '\0';
@@ -74,14 +67,13 @@ int emit_if(const char *cond) {
 }
 
 int emit_goto(int target) {
-    if (code_len >= MAX_CODE) { fprintf(stderr, "Too many TAC instructions.\n"); exit(1); }
+    if (code_len >= MAX_CODE) { fprintf(stderr, "too many TAC instructions\n"); exit(1); }
     code_buf[code_len].type = INS_GOTO;
     code_buf[code_len].text[0] = '\0';
     code_buf[code_len].target = target;
     return code_len++;
 }
 
-/* ── List Operations (Backpatching) ──────────────────────── */
 IntList *makelist(int idx) {
     IntList *n = (IntList *)malloc(sizeof(IntList));
     n->index = idx;
@@ -108,7 +100,16 @@ void backpatch(IntList *list, int target) {
     while (p) { patch_one(p->index, target); p = p->next; }
 }
 
-/* ── Temp & Helper Emitters ──────────────────────────────── */
+/* frees a backpatch list */
+void free_list(IntList *list) {
+    IntList *p;
+    while (list) {
+        p = list;
+        list = list->next;
+        free(p);
+    }
+}
+
 char *new_temp(void) {
     char buf[64];
     snprintf(buf, sizeof(buf), "t%d", temp_count++);
@@ -160,15 +161,21 @@ void emit_bool_assignment(const char *id, BAttr *b) {
     free(t);
 }
 
-/* ── TAC Printer ─────────────────────────────────────────── */
 void print_tac(void) {
     int i;
     for (i = 0; i < code_len; i++) {
-        if (code_buf[i].type == INS_TEXT)
+        if (code_buf[i].type == INS_TEXT) {
             printf("  %d: %s\n", line_of(i), code_buf[i].text);
-        else if (code_buf[i].type == INS_IF)
-            printf("  %d: if %s goto %d\n", line_of(i), code_buf[i].text, line_of(code_buf[i].target));
-        else
-            printf("  %d: goto %d\n", line_of(i), line_of(code_buf[i].target));
+        } else if (code_buf[i].type == INS_IF) {
+            if (code_buf[i].target < 0)
+                printf("  %d: if %s goto ???  ; unpatched\n", line_of(i), code_buf[i].text);
+            else
+                printf("  %d: if %s goto %d\n", line_of(i), code_buf[i].text, line_of(code_buf[i].target));
+        } else {
+            if (code_buf[i].target < 0)
+                printf("  %d: goto ???  ; unpatched\n", line_of(i));
+            else
+                printf("  %d: goto %d\n", line_of(i), line_of(code_buf[i].target));
+        }
     }
 }

@@ -520,9 +520,9 @@ inc_stmt
 
 return_stmt
     : RETURN             { emit_text("return"); }
-    | RETURN aexpr       { emit_text("return"); free_aattr($2); }
+    | RETURN aexpr       { emit_text("return %s", $2->place); free_aattr($2); }
     ;
-
+    
 M : /* empty */ { $$ = nextinstr(); } ;
 N : /* empty */ { $$ = makelist(emit_goto(-1)); } ;
 

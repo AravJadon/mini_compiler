@@ -65,6 +65,7 @@ IntList *makelist(int idx);
 IntList *merge_list(IntList *a, IntList *b);
 void     patch_one(int idx, int target);
 void     backpatch(IntList *list, int target);
+void     free_list(IntList *list);
 char    *new_temp(void);
 BAttr   *emit_truthy(const char *expr);
 BAttr   *emit_relop(const char *lhs, const char *op, const char *rhs);
