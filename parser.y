@@ -1,6 +1,23 @@
+/* ================================================================
+ *  parser.y  —  PHASE 2: Syntax Analysis (Grammar Rules)
+ *
+ *  Features:
+ *    - Verbose Bison error messages
+ *    - Location tracking (%locations) for line:col in diagnostics
+ *    - Contextual error recovery (not just generic "invalid statement")
+ *    - Assignment-in-condition warning
+ * ================================================================ */
 %code requires {
 #include "common.h"
 }
+
+%code provides {
+    /* Make token_readable available for custom error messages */
+    extern const char *token_readable(int tok);
+}
+
+%define parse.error verbose
+%locations
 
 %union {
     char *sval;
@@ -77,8 +94,14 @@ param_list
 param_decl
     : TYPE ID
       {
-          if (sym_declare($2)) {
-              log_sem_error(yylineno, "variable '%s' already declared", $2);
+          if (sym_declare($2, @2.first_line, @2.first_column)) {
+              log_sem_error(@2.first_line, @2.first_column,
+                  "redefinition of '%s'", $2);
+              SymEntry *prev = sym_find($2);
+              if (prev) {
+                  emit_diagnostic("<stdin>", prev->decl_line, prev->decl_col,
+                      "note", "previous definition of '%s' was here", $2);
+              }
           }
           free($2);
       }
@@ -87,6 +110,12 @@ param_decl
 /* ── Statements ──────────────────────────────────────────── */
 compound_stmt
     : LBRACE stmt_list RBRACE
+    | LBRACE stmt_list error RBRACE
+      {
+          log_syntax_error(@3.first_line, @3.first_column,
+              "expected '}' at end of compound statement");
+          yyerrok;
+      }
     ;
 
 stmt_list
@@ -104,8 +133,10 @@ non_if_stmt
     | assign_stmt SEMI
     | inc_stmt SEMI
     | return_stmt SEMI
-    | BREAK SEMI { emit_text("goto END_OF_LOOP_OR_SWITCH /* patch manually if needed */"); }
-    | CONTINUE SEMI { emit_text("goto START_OF_LOOP /* patch manually if needed */"); }
+    | BREAK SEMI
+      { emit_text("goto END_OF_LOOP_OR_SWITCH /* patch manually if needed */"); }
+    | CONTINUE SEMI
+      { emit_text("goto START_OF_LOOP /* patch manually if needed */"); }
     | ID LPAREN arg_list RPAREN SEMI
       { free($1); }
     | PRINTF LPAREN STRING RPAREN SEMI
@@ -125,7 +156,8 @@ non_if_stmt
     | SCANF LPAREN STRING COMMA AMPER ID RPAREN SEMI
       {
           if (!sym_lookup($6)) {
-              log_sem_error(yylineno, "variable '%s' undeclared", $6);
+              log_sem_error(@6.first_line, @6.first_column,
+                  "use of undeclared identifier '%s'", $6);
           }
           emit_text("param &%s", $6);
           emit_text("param %s", $3);
@@ -137,11 +169,41 @@ non_if_stmt
       { free_aattr($3); }
     | compound_stmt
     | SEMI
+    /* ── Error Recovery: missing semicolon ────────────────── */
+    | decl_stmt error
+      {
+          log_syntax_error(@2.first_line, @2.first_column,
+              "expected ';' after declaration");
+          yyerrok;
+      }
+    | assign_stmt error
+      {
+          log_syntax_error(@2.first_line, @2.first_column,
+              "expected ';' after assignment");
+          yyerrok;
+      }
+    | inc_stmt error
+      {
+          log_syntax_error(@2.first_line, @2.first_column,
+              "expected ';' after expression");
+          yyerrok;
+      }
+    /* ── Error Recovery: generic statement error ──────────── */
     | error SEMI
       {
-          if (yylineno != last_syntax_error_line) {
-              log_syntax_error(yylineno, "invalid statement");
-              last_syntax_error_line = yylineno;
+          if (@1.first_line != last_syntax_error_line) {
+              log_syntax_error(@1.first_line, @1.first_column,
+                  "expected expression before ';' token");
+              last_syntax_error_line = @1.first_line;
+          }
+          yyerrok;
+      }
+    | error RBRACE
+      {
+          if (@1.first_line != last_syntax_error_line) {
+              log_syntax_error(@1.first_line, @1.first_column,
+                  "expected expression before '}' token");
+              last_syntax_error_line = @1.first_line;
           }
           yyerrok;
       }
@@ -173,11 +235,35 @@ matched_stmt
           backpatch($3->falselist, $9);
           backpatch($7, nextinstr());
       }
+    | IF LPAREN error RPAREN M matched_stmt N ELSE M matched_stmt
+      {
+          log_syntax_error(@3.first_line, @3.first_column,
+              "expected expression in 'if' condition");
+          yyerrok;
+      }
+    | IF error
+      {
+          log_syntax_error(@1.first_line, @1.first_column + 2,
+              "expected '(' after 'if'");
+          yyerrok;
+      }
     | WHILE M LPAREN bexpr RPAREN M matched_stmt
       {
           backpatch($4->truelist, $6);
           emit_goto($2);
           backpatch($4->falselist, nextinstr());
+      }
+    | WHILE M LPAREN error RPAREN M matched_stmt
+      {
+          log_syntax_error(@4.first_line, @4.first_column,
+              "expected expression in 'while' condition");
+          yyerrok;
+      }
+    | WHILE error
+      {
+          log_syntax_error(@1.first_line, @1.first_column + 5,
+              "expected '(' after 'while'");
+          yyerrok;
       }
     | DO M statement WHILE M LPAREN bexpr RPAREN SEMI
       {
@@ -221,15 +307,30 @@ decl_items
 decl_item
     : ID
       {
-          if (sym_declare($1)) {
-              log_sem_error(yylineno, "variable '%s' already declared", $1);
+          if (sym_declare($1, @1.first_line, @1.first_column)) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "redefinition of '%s'", $1);
+              SymEntry *prev = sym_find($1);
+              if (prev) {
+                  emit_diagnostic("<stdin>", prev->decl_line, prev->decl_col,
+                      "note", "previous definition of '%s' was here", $1);
+              }
           }
           free($1);
       }
     | ID ASSIGN aexpr
       {
-          if (sym_declare($1)) {
-              log_sem_error(yylineno, "variable '%s' already declared", $1);
+          if (sym_declare($1, @1.first_line, @1.first_column)) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "redefinition of '%s'", $1);
+              SymEntry *prev = sym_find($1);
+              if (prev) {
+                  emit_diagnostic("<stdin>", prev->decl_line, prev->decl_col,
+                      "note", "previous definition of '%s' was here", $1);
+              }
+          } else {
+              SymEntry *e = sym_find($1);
+              if (e) e->is_initialized = 1;
           }
           emit_text("%s = %s", $1, $3->place);
           free($1);
@@ -237,16 +338,34 @@ decl_item
       }
     | ID ASSIGN LPAREN rel_bool RPAREN
       {
-          if (sym_declare($1)) {
-              log_sem_error(yylineno, "variable '%s' already declared", $1);
+          if (sym_declare($1, @1.first_line, @1.first_column)) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "redefinition of '%s'", $1);
+              SymEntry *prev = sym_find($1);
+              if (prev) {
+                  emit_diagnostic("<stdin>", prev->decl_line, prev->decl_col,
+                      "note", "previous definition of '%s' was here", $1);
+              }
+          } else {
+              SymEntry *e = sym_find($1);
+              if (e) e->is_initialized = 1;
           }
           emit_bool_assignment($1, $4);
           free($1);
       }
     | ID ASSIGN NOT LPAREN rel_bool RPAREN
       {
-          if (sym_declare($1)) {
-              log_sem_error(yylineno, "variable '%s' already declared", $1);
+          if (sym_declare($1, @1.first_line, @1.first_column)) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "redefinition of '%s'", $1);
+              SymEntry *prev = sym_find($1);
+              if (prev) {
+                  emit_diagnostic("<stdin>", prev->decl_line, prev->decl_col,
+                      "note", "previous definition of '%s' was here", $1);
+              }
+          } else {
+              SymEntry *e = sym_find($1);
+              if (e) e->is_initialized = 1;
           }
           IntList *tmp = $5->truelist;
           $5->truelist = $5->falselist;
@@ -261,7 +380,18 @@ assign_stmt
     : ID ASSIGN aexpr
       {
           if (!sym_lookup($1)) {
-              log_sem_error(yylineno, "variable '%s' undeclared", $1);
+              log_sem_error(@1.first_line, @1.first_column,
+                  "use of undeclared identifier '%s'", $1);
+          } else {
+              SymEntry *e = sym_find($1);
+              if (e) e->is_initialized = 1;
+              /* Detect self-assignment: x = x */
+              if (strcmp($1, $3->place) == 0) {
+                  emit_diagnostic("<stdin>", @1.first_line, @1.first_column,
+                      "warning",
+                      "explicitly assigning value of variable '%s' to itself [-Wself-assign]",
+                      $1);
+              }
           }
           emit_text("%s = %s", $1, $3->place);
           free($1);
@@ -270,7 +400,11 @@ assign_stmt
     | ID ASSIGN LPAREN rel_bool RPAREN
       {
           if (!sym_lookup($1)) {
-              log_sem_error(yylineno, "variable '%s' undeclared", $1);
+              log_sem_error(@1.first_line, @1.first_column,
+                  "use of undeclared identifier '%s'", $1);
+          } else {
+              SymEntry *e = sym_find($1);
+              if (e) e->is_initialized = 1;
           }
           emit_bool_assignment($1, $4);
           free($1);
@@ -278,7 +412,11 @@ assign_stmt
     | ID ASSIGN NOT LPAREN rel_bool RPAREN
       {
           if (!sym_lookup($1)) {
-              log_sem_error(yylineno, "variable '%s' undeclared", $1);
+              log_sem_error(@1.first_line, @1.first_column,
+                  "use of undeclared identifier '%s'", $1);
+          } else {
+              SymEntry *e = sym_find($1);
+              if (e) e->is_initialized = 1;
           }
           IntList *tmp = $5->truelist;
           $5->truelist = $5->falselist;
@@ -288,31 +426,61 @@ assign_stmt
       }
     | ID ADD_ASSIGN aexpr
       {
-          if (!sym_lookup($1)) { log_sem_error(yylineno, "variable '%s' undeclared", $1); }
+          if (!sym_lookup($1)) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "use of undeclared identifier '%s'", $1);
+          } else {
+              SymEntry *e = sym_find($1);
+              if (e) { e->is_initialized = 1; e->is_used = 1; }
+          }
           emit_compound_assign($1, "+", $3);
           free($1); free_aattr($3);
       }
     | ID SUB_ASSIGN aexpr
       {
-          if (!sym_lookup($1)) { log_sem_error(yylineno, "variable '%s' undeclared", $1); }
+          if (!sym_lookup($1)) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "use of undeclared identifier '%s'", $1);
+          } else {
+              SymEntry *e = sym_find($1);
+              if (e) { e->is_initialized = 1; e->is_used = 1; }
+          }
           emit_compound_assign($1, "-", $3);
           free($1); free_aattr($3);
       }
     | ID MUL_ASSIGN aexpr
       {
-          if (!sym_lookup($1)) { log_sem_error(yylineno, "variable '%s' undeclared", $1); }
+          if (!sym_lookup($1)) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "use of undeclared identifier '%s'", $1);
+          } else {
+              SymEntry *e = sym_find($1);
+              if (e) { e->is_initialized = 1; e->is_used = 1; }
+          }
           emit_compound_assign($1, "*", $3);
           free($1); free_aattr($3);
       }
     | ID DIV_ASSIGN aexpr
       {
-          if (!sym_lookup($1)) { log_sem_error(yylineno, "variable '%s' undeclared", $1); }
+          if (!sym_lookup($1)) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "use of undeclared identifier '%s'", $1);
+          } else {
+              SymEntry *e = sym_find($1);
+              if (e) { e->is_initialized = 1; e->is_used = 1; }
+          }
           emit_compound_assign($1, "/", $3);
           free($1); free_aattr($3);
       }
     | ID MOD_ASSIGN aexpr
       {
-          if (!sym_lookup($1)) { log_sem_error(yylineno, "variable '%s' undeclared", $1); }
+          if (!sym_lookup($1)) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "use of undeclared identifier '%s'", $1);
+          } else {
+              SymEntry *e = sym_find($1);
+              if (e) { e->is_initialized = 1; e->is_used = 1; }
+          }
           emit_compound_assign($1, "%", $3);
           free($1); free_aattr($3);
       }
@@ -322,22 +490,46 @@ assign_stmt
 inc_stmt
     : ID INC
       {
-          if (!sym_lookup($1)) { log_sem_error(yylineno, "variable '%s' undeclared", $1); }
+          if (!sym_lookup($1)) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "use of undeclared identifier '%s'", $1);
+          } else {
+              SymEntry *e = sym_find($1);
+              if (e) { e->is_initialized = 1; e->is_used = 1; }
+          }
           emit_incdec($1, 1); free($1);
       }
     | ID DEC
       {
-          if (!sym_lookup($1)) { log_sem_error(yylineno, "variable '%s' undeclared", $1); }
+          if (!sym_lookup($1)) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "use of undeclared identifier '%s'", $1);
+          } else {
+              SymEntry *e = sym_find($1);
+              if (e) { e->is_initialized = 1; e->is_used = 1; }
+          }
           emit_incdec($1, 0); free($1);
       }
     | INC ID
       {
-          if (!sym_lookup($2)) { log_sem_error(yylineno, "variable '%s' undeclared", $2); }
+          if (!sym_lookup($2)) {
+              log_sem_error(@2.first_line, @2.first_column,
+                  "use of undeclared identifier '%s'", $2);
+          } else {
+              SymEntry *e = sym_find($2);
+              if (e) { e->is_initialized = 1; e->is_used = 1; }
+          }
           emit_incdec($2, 1); free($2);
       }
     | DEC ID
       {
-          if (!sym_lookup($2)) { log_sem_error(yylineno, "variable '%s' undeclared", $2); }
+          if (!sym_lookup($2)) {
+              log_sem_error(@2.first_line, @2.first_column,
+                  "use of undeclared identifier '%s'", $2);
+          } else {
+              SymEntry *e = sym_find($2);
+              if (e) { e->is_initialized = 1; e->is_used = 1; }
+          }
           emit_incdec($2, 0); free($2);
       }
     ;
@@ -383,11 +575,36 @@ bprimary
     | rel_bool             { $$ = $1; }
     | ID
       {
-          if (!sym_lookup($1)) { log_sem_error(yylineno, "variable '%s' undeclared", $1); }
+          if (!sym_lookup($1)) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "use of undeclared identifier '%s'", $1);
+          } else {
+              SymEntry *e = sym_find($1);
+              if (e) e->is_used = 1;
+          }
           $$ = emit_truthy($1); free($1);
       }
     | NUMBER
       { $$ = emit_truthy($1); free($1); }
+    /* ── Assignment-in-condition warning ──────────────────── */
+    | ID ASSIGN aexpr
+      {
+          emit_diagnostic("<stdin>", @2.first_line, @2.first_column,
+              "warning",
+              "suggest parentheses around assignment used as truth value [-Wparentheses]");
+          emit_diagnostic("<stdin>", @2.first_line, @2.first_column,
+              "note", "use '==' to check for equality");
+          if (!sym_lookup($1)) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "use of undeclared identifier '%s'", $1);
+          } else {
+              SymEntry *e = sym_find($1);
+              if (e) e->is_initialized = 1;
+          }
+          emit_text("%s = %s", $1, $3->place);
+          $$ = emit_truthy($1);
+          free($1); free_aattr($3);
+      }
     ;
 
 rel_bool
@@ -424,12 +641,24 @@ factor
     : LPAREN aexpr RPAREN { $$ = $2; }
     | INC ID
       {
-          if (!sym_lookup($2)) { log_sem_error(yylineno, "variable '%s' undeclared", $2); }
+          if (!sym_lookup($2)) {
+              log_sem_error(@2.first_line, @2.first_column,
+                  "use of undeclared identifier '%s'", $2);
+          } else {
+              SymEntry *e = sym_find($2);
+              if (e) { e->is_initialized = 1; e->is_used = 1; }
+          }
           emit_incdec($2, 1); $$ = make_aattr($2);
       }
     | DEC ID
       {
-          if (!sym_lookup($2)) { log_sem_error(yylineno, "variable '%s' undeclared", $2); }
+          if (!sym_lookup($2)) {
+              log_sem_error(@2.first_line, @2.first_column,
+                  "use of undeclared identifier '%s'", $2);
+          } else {
+              SymEntry *e = sym_find($2);
+              if (e) { e->is_initialized = 1; e->is_used = 1; }
+          }
           emit_incdec($2, 0); $$ = make_aattr($2);
       }
     | MINUS factor %prec UMINUS
@@ -441,7 +670,13 @@ factor
       }
     | ID
       {
-          if (!sym_lookup($1)) { log_sem_error(yylineno, "variable '%s' undeclared", $1); }
+          if (!sym_lookup($1)) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "use of undeclared identifier '%s'", $1);
+          } else {
+              SymEntry *e = sym_find($1);
+              if (e) e->is_used = 1;
+          }
           $$ = make_aattr($1);
       }
     | NUMBER

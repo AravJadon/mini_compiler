@@ -4,8 +4,8 @@
  *  Features:
  *    - Column tracking for GCC-style diagnostics
  *    - Source line buffering for caret display
- *    - Verbose error messages (stray chars, invalid suffixes,
- *      unterminated comments/strings)
+ *    - Bison %locations integration (yylloc updated per token)
+ *    - Verbose error messages
  * ================================================================ */
 %{
 #include "parser.tab.h"
@@ -15,11 +15,17 @@
 /* ── Column Tracking ─────────────────────────────────────── */
 extern int yycolno;
 
-static void update_col(void) {
+/* ── Bison %locations integration ────────────────────────── */
+#define YY_USER_ACTION \
+    yylloc.first_line = yylloc.last_line = yylineno; \
+    yylloc.first_column = yycolno; \
+    yylloc.last_column = yycolno + yyleng - 1;
+
+static void advance_col(void) {
     yycolno += yyleng;
 }
 
-static int save_col(void) {
+static int cur_col(void) {
     return yycolno;
 }
 
@@ -27,15 +33,6 @@ static int save_col(void) {
 static char line_buf[MAX_LINE_LEN];
 static int  line_buf_pos = 0;
 static int  line_buf_lineno = 1;
-
-static void buf_flush(int lineno) {
-    if (line_buf_pos > 0) {
-        line_buf[line_buf_pos] = '\0';
-        store_source_line(line_buf_lineno, line_buf);
-        line_buf_pos = 0;
-    }
-    line_buf_lineno = lineno;
-}
 
 static void buf_append(const char *text, int len) {
     int i;
@@ -62,23 +59,18 @@ static char *dup_text(const char *s) {
 }
 
 #define TOK(t) do { \
-    int _col = save_col(); \
+    int _col = cur_col(); \
     log_token(t, yytext, yylineno, _col); \
-    update_col(); \
+    advance_col(); \
     return t; \
 } while(0)
 
 #define TOK_SVAL(t) do { \
-    int _col = save_col(); \
+    int _col = cur_col(); \
     yylval.sval = dup_text(yytext); \
     log_token(t, yytext, yylineno, _col); \
-    update_col(); \
+    advance_col(); \
     return t; \
-} while(0)
-
-#define SKIP() do { \
-    buf_append(yytext, yyleng); \
-    update_col(); \
 } while(0)
 
 %}
@@ -89,19 +81,19 @@ static char *dup_text(const char *s) {
 %%
 
     /* ── Whitespace & Newlines ───────────────────────────── */
-[ \t\r]+                    { buf_append(yytext, yyleng); update_col(); }
+[ \t\r]+                    { buf_append(yytext, yyleng); advance_col(); }
 \n                          { buf_append(yytext, yyleng); /* col reset in buf_append */ }
 
     /* ── Preprocessor Directives (skip) ──────────────────── */
-"#".*                       { buf_append(yytext, yyleng); update_col(); }
+"#".*                       { buf_append(yytext, yyleng); advance_col(); }
 
     /* ── Comments ────────────────────────────────────────── */
-"//".*                      { buf_append(yytext, yyleng); update_col(); }
+"//".*                      { buf_append(yytext, yyleng); advance_col(); }
 
-"/*"                        { buf_append(yytext, yyleng); update_col(); BEGIN(COMMENT); }
-<COMMENT>"*/"               { buf_append(yytext, yyleng); update_col(); BEGIN(INITIAL); }
+"/*"                        { buf_append(yytext, yyleng); advance_col(); BEGIN(COMMENT); }
+<COMMENT>"*/"               { buf_append(yytext, yyleng); advance_col(); BEGIN(INITIAL); }
 <COMMENT>\n                 { buf_append(yytext, yyleng); }
-<COMMENT>.                  { buf_append(yytext, yyleng); update_col(); }
+<COMMENT>.                  { buf_append(yytext, yyleng); advance_col(); }
 <COMMENT><<EOF>>            {
                                 log_lex_error(yylineno, yycolno, "unterminated comment");
                                 yyterminate();
@@ -126,7 +118,7 @@ static char *dup_text(const char *s) {
 "printf"                    { buf_append(yytext, yyleng); TOK(PRINTF); }
 "scanf"                     { buf_append(yytext, yyleng); TOK(SCANF); }
 
-    /* ── Multi-char Operators (must come before single-char) */
+    /* ── Multi-char Operators ────────────────────────────── */
 "=="                        { buf_append(yytext, yyleng); TOK(EQ); }
 "!="                        { buf_append(yytext, yyleng); TOK(NE); }
 "<="                        { buf_append(yytext, yyleng); TOK(LE); }
@@ -167,24 +159,22 @@ static char *dup_text(const char *s) {
     /* ── Unterminated String ─────────────────────────────── */
 \"([^\\\n]|\\.)*$           {
                                 buf_append(yytext, yyleng);
-                                int col = save_col();
+                                int col = cur_col();
                                 log_lex_error(yylineno, col,
                                     "missing terminating '\"' character");
-                                update_col();
+                                advance_col();
                             }
 
     /* ── Float Literal (not supported — error) ───────────── */
 [0-9]+\.[0-9]+              {
                                 buf_append(yytext, yyleng);
-                                int col = save_col();
-                                /* find the dot position for precise message */
+                                int col = cur_col();
                                 const char *dot = strchr(yytext, '.');
                                 log_lex_error(yylineno, col,
                                     "invalid suffix '%s' on integer constant "
                                     "(floating-point types are not supported)",
                                     dot);
-                                update_col();
-                                /* still return as NUMBER so parser can continue */
+                                advance_col();
                                 yylval.sval = dup_text(yytext);
                                 log_token(NUMBER, yytext, yylineno, col);
                                 return NUMBER;
@@ -199,9 +189,9 @@ static char *dup_text(const char *s) {
     /* ── Invalid Characters ──────────────────────────────── */
 .                           {
                                 buf_append(yytext, yyleng);
-                                int col = save_col();
+                                int col = cur_col();
                                 report_lex_error(yytext, col);
-                                update_col();
+                                advance_col();
                                 log_token(INVALID, yytext, yylineno, col);
                                 return INVALID;
                             }

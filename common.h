@@ -22,11 +22,19 @@ typedef struct BAttr  { IntList *truelist; IntList *falselist; } BAttr;
 
 /* ── Symbol Table (Phase 3) ─────────────────────────────── */
 #define SYM_SIZE 1024
-typedef struct SymEntry { char name[64]; struct SymEntry *next; } SymEntry;
+typedef struct SymEntry {
+    char name[64];
+    int  decl_line;
+    int  decl_col;
+    int  is_initialized;
+    int  is_used;
+    struct SymEntry *next;
+} SymEntry;
 extern SymEntry *sym_table[SYM_SIZE];
 
-int  sym_declare(const char *name);
+int  sym_declare(const char *name, int line, int col);
 int  sym_lookup(const char *name);
+SymEntry *sym_find(const char *name);
 
 /* ── TAC Globals (Phase 4) ──────────────────────────────── */
 #define MAX_CODE 4096
@@ -61,12 +69,7 @@ void     print_tac(void);
 extern int had_errors;
 extern int last_syntax_error_line;
 extern int yylineno;
-
-/* ── Token / Error Logging ──────────────────────────────── */
-#define MAX_TOKENS 16384
-#define MAX_ERRORS 256
-typedef struct { int token; char lexeme[128]; int line; int col; } TokenEntry;
-typedef struct { int line; int col; char message[256]; } ErrorEntry;
+extern int yycolno;
 
 /* ── Source Line Buffer (for caret diagnostics) ─────────── */
 #define MAX_SOURCE_LINES 8192
@@ -75,12 +78,15 @@ extern char source_lines[MAX_SOURCE_LINES][MAX_LINE_LEN];
 extern int source_line_count;
 void store_source_line(int lineno, const char *text);
 
-/* ── Column Tracking ────────────────────────────────────── */
-extern int yycolno;
-
 /* ── Diagnostic Formatter ───────────────────────────────── */
 void emit_diagnostic(const char *filename, int line, int col,
                      const char *severity, const char *fmt, ...);
+
+/* ── Token / Error Logging ──────────────────────────────── */
+#define MAX_TOKENS 16384
+#define MAX_ERRORS 256
+typedef struct { int token; char lexeme[128]; int line; int col; } TokenEntry;
+typedef struct { int line; int col; char message[256]; } ErrorEntry;
 
 extern TokenEntry token_log[MAX_TOKENS];
 extern int token_count;
