@@ -522,7 +522,7 @@ return_stmt
     : RETURN             { emit_text("return"); }
     | RETURN aexpr       { emit_text("return %s", $2->place); free_aattr($2); }
     ;
-    
+
 M : /* empty */ { $$ = nextinstr(); } ;
 N : /* empty */ { $$ = makelist(emit_goto(-1)); } ;
 
@@ -626,6 +626,7 @@ factor
               sym_mark_used($2, @2.first_line, @2.first_column);
               sym_mark_init($2);
           }
+          /* pre-increment: bump first, then use the new value */
           emit_incdec($2, 1); $$ = make_aattr($2);
       }
     | DEC ID
@@ -637,12 +638,68 @@ factor
               sym_mark_used($2, @2.first_line, @2.first_column);
               sym_mark_init($2);
           }
+          /* pre-decrement: bump first, then use the new value */
           emit_incdec($2, 0); $$ = make_aattr($2);
+      }
+    | ID INC
+      {
+          if (!sym_lookup($1)) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "use of undeclared identifier '%s'", $1);
+          } else {
+              sym_mark_used($1, @1.first_line, @1.first_column);
+              sym_mark_init($1);
+          }
+          /* post-increment: use the old value, then bump */
+          char *old = new_temp();
+          emit_text("%s = %s", old, $1);
+          emit_incdec($1, 1);
+          $$ = make_aattr(old);
+          free($1);
+      }
+    | ID DEC
+      {
+          if (!sym_lookup($1)) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "use of undeclared identifier '%s'", $1);
+          } else {
+              sym_mark_used($1, @1.first_line, @1.first_column);
+              sym_mark_init($1);
+          }
+          /* post-decrement: use the old value, then bump */
+          char *old = new_temp();
+          emit_text("%s = %s", old, $1);
+          emit_incdec($1, 0);
+          $$ = make_aattr(old);
+          free($1);
       }
     | MINUS factor %prec UMINUS
       {
           char *t = new_temp();
           emit_text("%s = 0 - %s", t, $2->place);
+          $$ = make_aattr(t);
+          free_aattr($2);
+      }
+    | PLUS factor %prec UMINUS
+      {
+          /* unary plus is a no-op, just pass through */
+          $$ = $2;
+      }
+    | NOT factor
+      {
+          /* logical NOT in arithmetic context: !x becomes (x == 0 ? 1 : 0) */
+          char *t = new_temp();
+          int false_lbl = nextinstr();
+          emit_text("%s = 1", t);
+          char *cond = mkstr("%s != 0", $2->place);
+          int i = emit_if(cond);
+          free(cond);
+          int skip = emit_goto(-1);
+          int true_lbl = nextinstr();
+          emit_text("%s = 0", t);
+          int end_lbl = nextinstr();
+          patch_one(i, true_lbl);
+          patch_one(skip, end_lbl);
           $$ = make_aattr(t);
           free_aattr($2);
       }
@@ -659,5 +716,4 @@ factor
     | NUMBER
       { $$ = make_aattr($1); }
     ;
-
 %%

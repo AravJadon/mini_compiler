@@ -16,4 +16,4 @@ clean:
 	rm -f compiler lex.yy.c parser.tab.c parser.tab.h *.o
 
 run: compiler
-	./compiler < test_simple.c
+	./compiler < test1_arithmetic.c

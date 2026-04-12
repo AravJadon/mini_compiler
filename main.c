@@ -309,7 +309,6 @@ static void print_phase6(void) {
     printf("  Generated Assembly (%d instructions):\n\n", asm_count);
     print_assembly();
     printf("\n");
-}
 
     printf("============================================================\n");
     printf("       PHASE 6: TARGET CODE GENERATION (Assembly)\n");
