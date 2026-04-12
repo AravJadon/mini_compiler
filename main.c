@@ -300,6 +300,25 @@ static void print_phase6(void) {
 
     generate_assembly();
 
+    printf("  Target: Simple RISC ISA (8 registers R0-R7)\n");
+    printf("  R0 = zero/reserved, R1-R7 allocated via graph coloring\n\n");
+
+    print_reg_allocation();
+    print_liveness_info();
+
+    printf("  Generated Assembly (%d instructions):\n\n", asm_count);
+    print_assembly();
+    printf("\n");
+}
+
+    printf("============================================================\n");
+    printf("       PHASE 6: TARGET CODE GENERATION (Assembly)\n");
+    printf("============================================================\n\n");
+    if (had_errors) { printf("  Skipped due to errors in previous phases.\n\n"); return; }
+    if (opt_len == 0) { printf("  (no code to generate)\n\n"); return; }
+
+    generate_assembly();
+
     printf("  Target:  Simple RISC ISA (8 registers R0-R7)\n");
     printf("  Total assembly instructions: %d\n\n", asm_count);
     print_assembly();

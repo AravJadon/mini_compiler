@@ -133,6 +133,20 @@ void print_opt_tac(void);
 extern int asm_count;
 void generate_assembly(void);
 void print_assembly(void);
+void print_reg_allocation(void);
+void print_liveness_info(void);
+
+/* register allocation info (filled by codegen) */
+#define NUM_REGS 8
+#define MAX_VARS 512
+
+typedef struct {
+    char name[64];
+    int  reg;       /* -1 means spilled to memory */
+} RegAssign;
+
+extern RegAssign reg_assigns[MAX_VARS];
+extern int reg_assign_count;
 
 /* lexer/parser glue */
 int  yylex(void);
