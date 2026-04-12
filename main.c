@@ -21,20 +21,64 @@ ErrorEntry sem_errors[MAX_ERRORS];
 int sem_error_count = 0;
 
 /* ── Logging Functions ───────────────────────────────────── */
-void log_token(int tok, const char *text, int line) {
+/* ── Source Line Buffer ──────────────────────────────────── */
+char source_lines[MAX_SOURCE_LINES][MAX_LINE_LEN];
+int source_line_count = 0;
+int yycolno = 1;
+
+void store_source_line(int lineno, const char *text) {
+    if (lineno > 0 && lineno <= MAX_SOURCE_LINES) {
+        strncpy(source_lines[lineno - 1], text, MAX_LINE_LEN - 1);
+        source_lines[lineno - 1][MAX_LINE_LEN - 1] = '\0';
+        if (lineno > source_line_count) source_line_count = lineno;
+    }
+}
+
+/* ── Diagnostic Formatter (GCC-style) ────────────────────── */
+void emit_diagnostic(const char *filename, int line, int col,
+                     const char *severity, const char *fmt, ...) {
+    va_list ap;
+    char msg[512];
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+
+    /* file:line:col: severity: message */
+    fprintf(stderr, "  %s:%d:%d: %s: %s\n", filename, line, col, severity, msg);
+
+    /* Print the source line if available */
+    if (line > 0 && line <= source_line_count && source_lines[line - 1][0] != '\0') {
+        const char *src = source_lines[line - 1];
+        /* Remove trailing newline for clean display */
+        int len = (int)strlen(src);
+        fprintf(stderr, "  %5d | %.*s\n", line,
+                (len > 0 && src[len-1] == '\n') ? len - 1 : len, src);
+        /* Caret line */
+        fprintf(stderr, "        | ");
+        int i;
+        for (i = 1; i < col; i++) {
+            fprintf(stderr, "%c", (src[i-1] == '\t') ? '\t' : ' ');
+        }
+        fprintf(stderr, "^\n");
+    }
+}
+
+void log_token(int tok, const char *text, int line, int col) {
     if (token_count < MAX_TOKENS) {
         token_log[token_count].token = tok;
         strncpy(token_log[token_count].lexeme, text, 127);
         token_log[token_count].lexeme[127] = '\0';
         token_log[token_count].line = line;
+        token_log[token_count].col = col;
         token_count++;
     }
 }
 
-void log_lex_error(int line, const char *fmt, ...) {
+void log_lex_error(int line, int col, const char *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     if (lex_error_count < MAX_ERRORS) {
         lex_errors[lex_error_count].line = line;
+        lex_errors[lex_error_count].col = col;
         vsnprintf(lex_errors[lex_error_count].message, 256, fmt, ap);
         lex_error_count++;
     }
@@ -43,10 +87,11 @@ void log_lex_error(int line, const char *fmt, ...) {
     last_syntax_error_line = line;
 }
 
-void log_syntax_error(int line, const char *fmt, ...) {
+void log_syntax_error(int line, int col, const char *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     if (syntax_error_count < MAX_ERRORS) {
         syntax_errors[syntax_error_count].line = line;
+        syntax_errors[syntax_error_count].col = col;
         vsnprintf(syntax_errors[syntax_error_count].message, 256, fmt, ap);
         syntax_error_count++;
     }
@@ -54,10 +99,11 @@ void log_syntax_error(int line, const char *fmt, ...) {
     had_errors = 1;
 }
 
-void log_sem_error(int line, const char *fmt, ...) {
+void log_sem_error(int line, int col, const char *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     if (sem_error_count < MAX_ERRORS) {
         sem_errors[sem_error_count].line = line;
+        sem_errors[sem_error_count].col = col;
         vsnprintf(sem_errors[sem_error_count].message, 256, fmt, ap);
         sem_error_count++;
     }
@@ -126,18 +172,22 @@ static void print_phase1(void) {
     printf("============================================================\n");
     printf("       PHASE 1: LEXICAL ANALYSIS (Tokenization)\n");
     printf("============================================================\n\n");
-    printf("  %-8s %-20s %s\n", "Line", "Token Type", "Lexeme");
-    printf("  %-8s %-20s %s\n", "----", "----------", "------");
+    printf("  %-10s %-20s %s\n", "Line:Col", "Token Type", "Lexeme");
+    printf("  %-10s %-20s %s\n", "--------", "----------", "------");
     for (i = 0; i < token_count; i++) {
-        printf("  %-8d %-20s %s\n",
-            token_log[i].line, token_name(token_log[i].token), token_log[i].lexeme);
+        char loc[32];
+        snprintf(loc, sizeof(loc), "%d:%d", token_log[i].line, token_log[i].col);
+        printf("  %-10s %-20s %s\n",
+            loc, token_name(token_log[i].token), token_log[i].lexeme);
     }
     printf("\n  Total tokens: %d\n", token_count);
     if (lex_error_count > 0) {
         int j;
         printf("\n  LEXICAL ERRORS:\n");
-        for (j = 0; j < lex_error_count; j++)
-            printf("    Line %d: %s\n", lex_errors[j].line, lex_errors[j].message);
+        for (j = 0; j < lex_error_count; j++) {
+            emit_diagnostic("<stdin>", lex_errors[j].line, lex_errors[j].col,
+                            "error", "%s", lex_errors[j].message);
+        }
     } else {
         printf("  [OK] No lexical errors.\n");
     }
@@ -242,8 +292,8 @@ void yyerror(const char *s) {
     had_errors = 1;
 }
 
-void report_lex_error(const char *bad) {
-    log_lex_error(yylineno, "invalid character '%s'", bad);
+void report_lex_error(const char *bad, int col) {
+    log_lex_error(yylineno, col, "stray '%s' in program", bad);
 }
 
 /* ── Main Entry Point ────────────────────────────────────── */

@@ -65,8 +65,22 @@ extern int yylineno;
 /* ── Token / Error Logging ──────────────────────────────── */
 #define MAX_TOKENS 16384
 #define MAX_ERRORS 256
-typedef struct { int token; char lexeme[128]; int line; } TokenEntry;
-typedef struct { int line; char message[256]; } ErrorEntry;
+typedef struct { int token; char lexeme[128]; int line; int col; } TokenEntry;
+typedef struct { int line; int col; char message[256]; } ErrorEntry;
+
+/* ── Source Line Buffer (for caret diagnostics) ─────────── */
+#define MAX_SOURCE_LINES 8192
+#define MAX_LINE_LEN 1024
+extern char source_lines[MAX_SOURCE_LINES][MAX_LINE_LEN];
+extern int source_line_count;
+void store_source_line(int lineno, const char *text);
+
+/* ── Column Tracking ────────────────────────────────────── */
+extern int yycolno;
+
+/* ── Diagnostic Formatter ───────────────────────────────── */
+void emit_diagnostic(const char *filename, int line, int col,
+                     const char *severity, const char *fmt, ...);
 
 extern TokenEntry token_log[MAX_TOKENS];
 extern int token_count;
@@ -77,10 +91,10 @@ extern int syntax_error_count;
 extern ErrorEntry sem_errors[MAX_ERRORS];
 extern int sem_error_count;
 
-void log_token(int tok, const char *text, int line);
-void log_lex_error(int line, const char *fmt, ...);
-void log_syntax_error(int line, const char *fmt, ...);
-void log_sem_error(int line, const char *fmt, ...);
+void log_token(int tok, const char *text, int line, int col);
+void log_lex_error(int line, int col, const char *fmt, ...);
+void log_syntax_error(int line, int col, const char *fmt, ...);
+void log_sem_error(int line, int col, const char *fmt, ...);
 
 /* ── Optimizer (Phase 5) ────────────────────────────────── */
 extern Instruction opt_buf[MAX_CODE];
@@ -101,6 +115,6 @@ void print_assembly(void);
 /* ── Lexer/Parser Interface ─────────────────────────────── */
 int  yylex(void);
 void yyerror(const char *s);
-void report_lex_error(const char *bad);
+void report_lex_error(const char *bad, int col);
 
 #endif /* COMMON_H */
