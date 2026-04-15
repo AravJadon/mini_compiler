@@ -1,0 +1,352 @@
+
+************************************************************
+*       MINI COMPILER FOR TOY-C LANGUAGE                   *
+*       Target: Simple RISC ISA                            *
+************************************************************
+
+  <stdin>:13:9: warning: 'a' is used uninitialized [-Wuninitialized]
+  <stdin>:21:7: warning: 'a' is used uninitialized [-Wuninitialized]
+  <stdin>:62:6: error: syntax error, unexpected RBRACE, expecting STRING
+  <stdin>:81:10: error: syntax error, unexpected SCANF, expecting STRING
+============================================================
+       PHASE 1: LEXICAL ANALYSIS (Tokenization)
+============================================================
+
+  Line:Col   Token Type           Lexeme
+  --------   ----------           ------
+  1:1        TYPE                 int
+  1:5        ID                   global_var
+  1:15       SEMI                 ;
+  5:1        TYPE                 int
+  5:5        ID                   main
+  5:9        LPAREN               (
+  5:10       RPAREN               )
+  5:12       LBRACE               {
+  7:5        TYPE                 int
+  7:9        ID                   a
+  7:10       SEMI                 ;
+  8:5        TYPE                 int
+  8:9        ID                   b
+  8:11       ASSIGN               =
+  8:13       NUMBER               10
+  8:15       SEMI                 ;
+  9:5        TYPE                 int
+  9:9        ID                   c
+  9:11       ASSIGN               =
+  9:13       NUMBER               20
+  9:15       SEMI                 ;
+  10:5       TYPE                 int
+  10:9       ID                   d
+  10:10      SEMI                 ;
+  13:5       ID                   d
+  13:7       ASSIGN               =
+  13:9       ID                   a
+  13:11      PLUS                 +
+  13:13      ID                   b
+  13:15      MUL                  *
+  13:17      ID                   c
+  13:19      MINUS                -
+  13:21      LPAREN               (
+  13:22      ID                   b
+  13:24      DIV                  /
+  13:26      NUMBER               2
+  13:27      RPAREN               )
+  13:29      MOD                  %
+  13:31      NUMBER               3
+  13:32      SEMI                 ;
+  14:5       ID                   d
+  14:7       ADD_ASSIGN           +=
+  14:10      NUMBER               5
+  14:11      SEMI                 ;
+  15:5       ID                   d
+  15:7       SUB_ASSIGN           -=
+  15:10      NUMBER               2
+  15:11      SEMI                 ;
+  16:5       ID                   d
+  16:7       MUL_ASSIGN           *=
+  16:10      NUMBER               3
+  16:11      SEMI                 ;
+  17:5       ID                   d
+  17:7       DIV_ASSIGN           /=
+  17:10      NUMBER               2
+  17:11      SEMI                 ;
+  18:5       ID                   d
+  18:7       MOD_ASSIGN           %=
+  18:10      NUMBER               4
+  18:11      SEMI                 ;
+  21:5       INC                  ++
+  21:7       ID                   a
+  21:8       SEMI                 ;
+  22:5       ID                   b
+  22:6       INC                  ++
+  22:8       SEMI                 ;
+  23:5       DEC                  --
+  23:7       ID                   c
+  23:8       SEMI                 ;
+  24:5       ID                   d
+  24:6       DEC                  --
+  24:8       SEMI                 ;
+  27:5       TYPE                 int
+  27:9       ID                   truthy
+  27:15      SEMI                 ;
+  28:5       TYPE                 int
+  28:9       ID                   falsy
+  28:14      SEMI                 ;
+  31:5       ID                   truthy
+  31:12      ASSIGN               =
+  31:14      LPAREN               (
+  31:15      ID                   a
+  31:17      LT                   <
+  31:19      ID                   b
+  31:20      RPAREN               )
+  31:21      SEMI                 ;
+  32:5       ID                   falsy
+  32:11      ASSIGN               =
+  32:13      NOT                  !
+  32:14      LPAREN               (
+  32:15      ID                   a
+  32:17      GT                   >
+  32:19      ID                   b
+  32:20      RPAREN               )
+  32:21      SEMI                 ;
+  34:5       IF                   if
+  34:8       LPAREN               (
+  34:9       ID                   a
+  34:11      LE                   <=
+  34:14      NUMBER               10
+  34:17      AND                  &&
+  34:20      ID                   b
+  34:22      GE                   >=
+  34:25      NUMBER               5
+  34:27      OR                   ||
+  34:30      NOT                  !
+  34:31      LPAREN               (
+  34:32      ID                   c
+  34:34      EQ                   ==
+  34:37      NUMBER               20
+  34:39      RPAREN               )
+  34:40      RPAREN               )
+  34:42      LBRACE               {
+  35:9       ID                   d
+  35:11      ASSIGN               =
+  35:13      NUMBER               1
+  35:14      SEMI                 ;
+  36:5       RBRACE               }
+  36:7       ELSE                 else
+  36:12      LBRACE               {
+  37:9       ID                   d
+  37:11      ASSIGN               =
+  37:13      NUMBER               0
+  37:14      SEMI                 ;
+  38:5       RBRACE               }
+  41:5       TYPE                 int
+  41:9       ID                   count
+  41:15      ASSIGN               =
+  41:17      NUMBER               0
+  41:18      SEMI                 ;
+  42:5       WHILE                while
+  42:11      LPAREN               (
+  42:12      ID                   count
+  42:18      LT                   <
+  42:20      NUMBER               10
+  42:22      RPAREN               )
+  42:24      LBRACE               {
+  43:9       ID                   count
+  43:14      INC                  ++
+  43:16      SEMI                 ;
+  44:9       IF                   if
+  44:12      LPAREN               (
+  44:13      ID                   count
+  44:19      EQ                   ==
+  44:22      NUMBER               5
+  44:23      RPAREN               )
+  44:25      LBRACE               {
+  45:13      CONTINUE             continue
+  45:21      SEMI                 ;
+  46:9       RBRACE               }
+  47:9       IF                   if
+  47:12      LPAREN               (
+  47:13      ID                   count
+  47:19      EQ                   ==
+  47:22      NUMBER               8
+  47:23      RPAREN               )
+  47:25      LBRACE               {
+  48:13      BREAK                break
+  48:18      SEMI                 ;
+  49:9       RBRACE               }
+  50:5       RBRACE               }
+  52:5       DO                   do
+  52:8       LBRACE               {
+  53:9       ID                   count
+  53:14      DEC                  --
+  53:16      SEMI                 ;
+  54:5       RBRACE               }
+  54:7       WHILE                while
+  54:13      LPAREN               (
+  54:14      ID                   count
+  54:20      GT                   >
+  54:22      NUMBER               0
+  54:23      RPAREN               )
+  54:24      SEMI                 ;
+  60:5       FOR                  for
+  60:9       LPAREN               (
+  60:10      TYPE                 int
+  60:14      ID                   i
+  60:16      ASSIGN               =
+  60:18      NUMBER               0
+  60:19      SEMI                 ;
+  60:21      ID                   i
+  60:23      LT                   <
+  60:25      NUMBER               5
+  60:26      SEMI                 ;
+  60:28      ID                   i
+  60:30      GT                   >
+  60:32      NUMBER               0
+  60:33      RPAREN               )
+  60:35      LBRACE               {
+  61:9       PRINTF               printf
+  61:15      LPAREN               (
+  62:5       RBRACE               }
+  65:5       TYPE                 int
+  65:9       ID                   choice
+  65:16      ASSIGN               =
+  65:18      NUMBER               2
+  65:19      SEMI                 ;
+  66:5       SWITCH               switch
+  66:11      LPAREN               (
+  66:12      ID                   choice
+  66:18      RPAREN               )
+  66:20      LBRACE               {
+  67:9       CASE                 case
+  67:14      NUMBER               1
+  67:15      COLON                :
+  67:17      LBRACE               {
+  68:13      ID                   a
+  68:15      ASSIGN               =
+  68:17      NUMBER               100
+  68:20      SEMI                 ;
+  69:9       RBRACE               }
+  70:9       CASE                 case
+  70:14      NUMBER               2
+  70:15      COLON                :
+  70:17      LBRACE               {
+  71:13      ID                   a
+  71:15      ASSIGN               =
+  71:17      NUMBER               200
+  71:20      SEMI                 ;
+  72:9       RBRACE               }
+  73:9       DEFAULT              default
+  73:16      COLON                :
+  73:18      LBRACE               {
+  74:13      ID                   a
+  74:15      ASSIGN               =
+  74:17      NUMBER               0
+  74:18      SEMI                 ;
+  75:9       RBRACE               }
+  76:5       RBRACE               }
+  79:5       TYPE                 int
+  79:9       ID                   input_val
+  79:18      SEMI                 ;
+  80:5       PRINTF               printf
+  80:11      LPAREN               (
+  81:5       SCANF                scanf
+  81:10      LPAREN               (
+  82:5       PRINTF               printf
+  82:11      LPAREN               (
+  85:5       TYPE                 int
+  85:9       ID                   result
+  85:15      SEMI                 ;
+  87:5       RETURN               return
+  87:12      NUMBER               0
+  87:13      SEMI                 ;
+  88:1       RBRACE               }
+
+  Total tokens: 246
+
+  LEXICAL ERRORS:
+  <stdin>:61:16: error: missing terminating '"' character
+     61 |         printf("Loop running");
+        |                ^
+  <stdin>:80:12: error: missing terminating '"' character
+     80 |     printf("Enter value:");
+        |            ^
+  <stdin>:81:11: error: missing terminating '"' character
+     81 |     scanf("%d", &input_val);
+        |           ^
+  <stdin>:82:12: error: missing terminating '"' character
+     82 |     printf("You entered:", input_val);
+        |            ^
+
+============================================================
+       PHASE 2: SYNTAX ANALYSIS (Parsing)
+============================================================
+
+  SYNTAX ERRORS:
+  <stdin>:62:6: error: syntax error, unexpected RBRACE, expecting STRING
+     62 |     }
+        |      ^
+  <stdin>:61:9: error: expected '}' at end of compound statement
+     61 |         printf("Loop running");
+        |         ^
+  <stdin>:81:10: error: syntax error, unexpected SCANF, expecting STRING
+     81 |     scanf("%d", &input_val);
+        |          ^
+  <stdin>:80:5: error: expected expression before ';' token
+     80 |     printf("Enter value:");
+        |     ^
+
+============================================================
+       PHASE 3: SEMANTIC ANALYSIS
+============================================================
+
+  Symbol Table (Declared Variables):
+  Name                 Type   Line:Col   Init   Used  
+  ----                 ----   --------   ----   ----  
+  falsy                int    28:9       yes    no    
+  input_val            int    79:9       no     no    
+  count                int    41:9       yes    yes   
+  d                    int    10:9       yes    yes   
+  a                    int    7:9        yes    yes   
+  c                    int    9:9        yes    yes   
+  b                    int    8:9        yes    yes   
+  i                    int    60:14      yes    yes   
+  global_var           int    1:5        no     no    
+  choice               int    65:9       yes    yes   
+  truthy               int    27:9       yes    no    
+
+  Total declared: 11 variables
+
+  [OK] Semantic analysis completed successfully.
+  All variables declared before use. No duplicate declarations.
+  <stdin>:28:9: warning: variable 'falsy' set but not used [-Wunused-but-set-variable]
+     28 |     int falsy;
+        |         ^
+  <stdin>:79:9: warning: unused variable 'input_val' [-Wunused-variable]
+     79 |     int input_val;
+        |         ^
+  <stdin>:1:5: warning: unused variable 'global_var' [-Wunused-variable]
+      1 | int global_var;
+        |     ^
+  <stdin>:27:9: warning: variable 'truthy' set but not used [-Wunused-but-set-variable]
+     27 |     int truthy;
+        |         ^
+
+============================================================
+       PHASE 4: INTERMEDIATE CODE (Three Address Code)
+============================================================
+
+  Skipped due to errors in previous phases.
+
+============================================================
+       PHASE 5: OPTIMIZATION
+============================================================
+
+  Skipped due to errors in previous phases.
+
+============================================================
+       PHASE 6: TARGET CODE GENERATION (Assembly)
+============================================================
+
+  Skipped due to errors in previous phases.
+
+Compilation FAILED with errors.

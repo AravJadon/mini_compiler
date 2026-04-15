@@ -157,7 +157,7 @@ static char *dup_text(const char *s) {
 \'([^\\\n]|\\.)*\'          { buf_append(yytext, yyleng); TOK_SVAL(STRING); }
 
     /* ── Unterminated String ─────────────────────────────── */
-\"([^\\\n]|\\.)*$           {
+\"([^\\\"\n]|\\.)*$           {
                                 buf_append(yytext, yyleng);
                                 int col = cur_col();
                                 log_lex_error(yylineno, col,
