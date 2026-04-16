@@ -32,6 +32,7 @@ typedef struct SymEntry {
     int  decl_col;
     int  is_initialized;
     int  is_used;
+    int  scope_level;          /* 0 = file/global, 1 = function body, 2+ = nested blocks */
     struct SymEntry *next;
 } SymEntry;
 
@@ -43,6 +44,13 @@ SymEntry *sym_find(const char *name);
 SymEntry *sym_mark_used(const char *name, int line, int col);
 SymEntry *sym_mark_init(const char *name);
 const char *sym_type_str(SymEntry *e);
+
+/* scope stack helpers — each { pushes, each } pops.
+   declarations collide only within the same scope level, and lookups
+   walk outward from the innermost scope toward global. */
+void sym_push_scope(void);
+void sym_pop_scope(void);
+int  sym_current_scope(void);
 
 /* tac globals */
 #define MAX_CODE 4096
@@ -73,6 +81,19 @@ void     emit_compound_assign(const char *id, const char *op, AAttr *rhs);
 void     emit_incdec(const char *id, int is_inc);
 void     emit_bool_assignment(const char *id, BAttr *b);
 void     print_tac(void);
+
+/* ---- break / continue label stacks ----
+   whenever the parser enters a loop or switch, it pushes the
+   end label (for break) and, for loops only, the header label
+   (for continue). break/continue emit a deferred goto whose
+   target is patched when the stack is popped. */
+void breaklist_push(void);
+void breaklist_pop(int end_target);
+void breaklist_add(int goto_idx);     /* register an emit_goto(-1) to be patched */
+
+void continuelist_push(void);
+void continuelist_pop(int loop_head_target);
+void continuelist_add(int goto_idx);
 
 /* error state */
 extern int had_errors;
@@ -125,6 +146,7 @@ extern int stat_strength_red;
 extern int stat_global_const;
 extern int stat_loop_inv;
 extern int stat_unreachable;
+extern int stat_cond_fold;       /* compile-time resolved branch conditions */
 
 void optimize(void);
 void print_opt_tac(void);

@@ -283,6 +283,7 @@ static void print_phase5(void) {
     printf("    - Dead Code Elimination:    %d\n", stat_dead_elim);
     printf("\n  Global optimizations:\n");
     printf("    - Global Const Propagation: %d\n", stat_global_const);
+    printf("    - Constant-Condition Fold:  %d\n", stat_cond_fold);
     printf("    - Loop-Invariant Motion:    %d\n", stat_loop_inv);
     printf("    - Unreachable Code Removal: %d\n", stat_unreachable);
     printf("\n    Total instructions removed: %d\n", code_len - opt_len);

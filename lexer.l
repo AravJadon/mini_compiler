@@ -6,6 +6,7 @@
  *    - Source line buffering for caret display
  *    - Bison %locations integration (yylloc updated per token)
  *    - Verbose error messages
+ *    - Scope tracking via sym_push_scope / sym_pop_scope on braces
  * ================================================================ */
 %{
 #include "parser.tab.h"
@@ -145,8 +146,15 @@ static char *dup_text(const char *s) {
 "!"                         { buf_append(yytext, yyleng); TOK(NOT); }
 "("                         { buf_append(yytext, yyleng); TOK(LPAREN); }
 ")"                         { buf_append(yytext, yyleng); TOK(RPAREN); }
-"{"                         { buf_append(yytext, yyleng); TOK(LBRACE); }
-"}"                         { buf_append(yytext, yyleng); TOK(RBRACE); }
+
+    /* ── Braces also bump the scope stack so the symbol table
+         knows a new block has started/ended. keeps the grammar
+         free of mid-rule actions, which conflict with bison's
+         LR resolution when compound_stmt is reachable through
+         many different statement paths. */
+"{"                         { buf_append(yytext, yyleng); sym_push_scope(); TOK(LBRACE); }
+"}"                         { buf_append(yytext, yyleng); sym_pop_scope();  TOK(RBRACE); }
+
 ";"                         { buf_append(yytext, yyleng); TOK(SEMI); }
 ","                         { buf_append(yytext, yyleng); TOK(COMMA); }
 ":"                         { buf_append(yytext, yyleng); TOK(COLON); }
