@@ -161,6 +161,72 @@ void emit_bool_assignment(const char *id, BAttr *b) {
     free(t);
 }
 
+/* ---- break/continue label stacks ----
+   each loop and each switch pushes a frame on entry. break/continue
+   record the index of their emit_goto(-1), and those get backpatched
+   when the frame pops with a known end/header target.
+
+   switch only needs the break stack (no continue target).
+   loops need both: break jumps past the loop, continue jumps
+   to the loop header. */
+
+#define MAX_CTRL_DEPTH 64
+
+typedef struct {
+    IntList *pending;    /* list of emit_goto(-1) indices waiting for a target */
+} CtrlFrame;
+
+static CtrlFrame break_stack[MAX_CTRL_DEPTH];
+static int break_sp = 0;
+static CtrlFrame continue_stack[MAX_CTRL_DEPTH];
+static int continue_sp = 0;
+
+void breaklist_push(void) {
+    if (break_sp >= MAX_CTRL_DEPTH) return;
+    break_stack[break_sp].pending = NULL;
+    break_sp++;
+}
+
+void breaklist_add(int goto_idx) {
+    if (break_sp <= 0) {
+        /* nothing to break out of — leave the goto unpatched, optimizer
+           / codegen will flag it. happens only on bad source code. */
+        return;
+    }
+    IntList *n = makelist(goto_idx);
+    break_stack[break_sp - 1].pending =
+        merge_list(break_stack[break_sp - 1].pending, n);
+}
+
+void breaklist_pop(int end_target) {
+    if (break_sp <= 0) return;
+    CtrlFrame *f = &break_stack[--break_sp];
+    backpatch(f->pending, end_target);
+    free_list(f->pending);
+    f->pending = NULL;
+}
+
+void continuelist_push(void) {
+    if (continue_sp >= MAX_CTRL_DEPTH) return;
+    continue_stack[continue_sp].pending = NULL;
+    continue_sp++;
+}
+
+void continuelist_add(int goto_idx) {
+    if (continue_sp <= 0) return;
+    IntList *n = makelist(goto_idx);
+    continue_stack[continue_sp - 1].pending =
+        merge_list(continue_stack[continue_sp - 1].pending, n);
+}
+
+void continuelist_pop(int loop_head_target) {
+    if (continue_sp <= 0) return;
+    CtrlFrame *f = &continue_stack[--continue_sp];
+    backpatch(f->pending, loop_head_target);
+    free_list(f->pending);
+    f->pending = NULL;
+}
+
 void print_tac(void) {
     int i;
     for (i = 0; i < code_len; i++) {

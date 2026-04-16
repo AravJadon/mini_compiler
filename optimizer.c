@@ -15,6 +15,7 @@ int stat_strength_red = 0;
 int stat_global_const = 0;
 int stat_loop_inv = 0;
 int stat_unreachable = 0;
+int stat_cond_fold = 0;
 
 /* parsed form of a single TAC instruction */
 typedef struct {
@@ -90,33 +91,6 @@ static int contains_var(const char *text, const char *var) {
     return 0;
 }
 
-/* replaces whole-word occurrences of 'var' with 'rep' in buf */
-static void replace_var_in_str(char *buf, int bufsize, const char *var, const char *rep) {
-    char tmp[256];
-    char *p = buf;
-    size_t vlen = strlen(var);
-    size_t rlen = strlen(rep);
-    int out = 0;
-
-    while (*p && out < bufsize - 1) {
-        if (strncmp(p, var, vlen) == 0) {
-            int left_ok  = (p == buf) || (!isalnum((unsigned char)*(p-1)) && *(p-1) != '_');
-            int right_ok = !isalnum((unsigned char)*(p+vlen)) && *(p+vlen) != '_';
-            if (left_ok && right_ok) {
-                size_t i;
-                for (i = 0; i < rlen && out < bufsize - 1; i++)
-                    tmp[out++] = rep[i];
-                p += vlen;
-                continue;
-            }
-        }
-        tmp[out++] = *p++;
-    }
-    tmp[out] = '\0';
-    strncpy(buf, tmp, bufsize - 1);
-    buf[bufsize - 1] = '\0';
-}
-
 /* jump target tracking */
 static int jump_target[MAX_CODE];
 
@@ -129,6 +103,47 @@ static void find_jump_targets(void) {
             jump_target[opt_buf[i].target] = 1;
         }
     }
+}
+
+/* ---- loop region map ----
+   for each instruction index, record whether it's the head of a
+   loop (target of a back-edge) and the range of the loop body.
+   the optimizer uses this to invalidate const/copy maps when
+   entering a loop, not globally — that way, code BEFORE the loop
+   still benefits from propagation. */
+
+static int loop_head[MAX_CODE];      /* 1 if this index is a loop header */
+static int loop_end_of[MAX_CODE];    /* if loop_head[i], this is the back-edge idx */
+
+static void scan_loops(void) {
+    memset(loop_head, 0, sizeof(int) * opt_len);
+    memset(loop_end_of, 0, sizeof(int) * opt_len);
+    int i;
+    for (i = 0; i < opt_len; i++) {
+        int back_target = -1;
+        if (opt_buf[i].type == INS_GOTO &&
+            opt_buf[i].target >= 0 && opt_buf[i].target < i) {
+            back_target = opt_buf[i].target;
+        } else if (opt_buf[i].type == INS_IF &&
+            opt_buf[i].target >= 0 && opt_buf[i].target < i) {
+            back_target = opt_buf[i].target;
+        }
+        if (back_target < 0) continue;
+        loop_head[back_target] = 1;
+        loop_end_of[back_target] = i;
+    }
+}
+
+/* does any instruction in [start..end] redefine `name`? */
+static int var_defined_in_range(const char *name, int start, int end) {
+    int i;
+    for (i = start; i <= end && i < opt_len; i++) {
+        if (opt_buf[i].type != INS_TEXT) continue;
+        ParsedTAC p;
+        parse_tac(opt_buf[i].text, &p);
+        if (p.kind >= 1 && strcmp(p.dest, name) == 0) return 1;
+    }
+    return 0;
 }
 
 /* ---- PASS: constant folding ----
@@ -163,8 +178,7 @@ static void constant_folding(void) {
 
 /* ---- PASS: algebraic simplification ----
    x + 0 = x, x - 0 = x, x * 1 = x, x / 1 = x,
-   x * 0 = 0, 0 * x = 0, 0 + x = x, 0 - x = neg handled elsewhere,
-   x - x = 0 */
+   x * 0 = 0, 0 * x = 0, 0 + x = x, x - x = 0, etc. */
 static void algebraic_simplification(void) {
     int i;
     for (i = 0; i < opt_len; i++) {
@@ -181,45 +195,34 @@ static void algebraic_simplification(void) {
 
         if (strcmp(p.op, "+") == 0) {
             if (s2_is_num && v2 == 0) {
-                /* x + 0 = x */
-                strncpy(p.src1, p.src1, 63); p.kind = 1; changed = 1;
+                p.kind = 1; changed = 1;
             } else if (s1_is_num && v1 == 0) {
-                /* 0 + x = x */
                 strncpy(p.src1, p.src2, 63); p.kind = 1; changed = 1;
             }
         } else if (strcmp(p.op, "-") == 0) {
             if (s2_is_num && v2 == 0) {
-                /* x - 0 = x */
                 p.kind = 1; changed = 1;
             } else if (strcmp(p.src1, p.src2) == 0) {
-                /* x - x = 0 */
                 strncpy(p.src1, "0", 63); p.kind = 1; changed = 1;
             }
         } else if (strcmp(p.op, "*") == 0) {
             if ((s2_is_num && v2 == 0) || (s1_is_num && v1 == 0)) {
-                /* x * 0 or 0 * x = 0 */
                 strncpy(p.src1, "0", 63); p.kind = 1; changed = 1;
             } else if (s2_is_num && v2 == 1) {
-                /* x * 1 = x */
                 p.kind = 1; changed = 1;
             } else if (s1_is_num && v1 == 1) {
-                /* 1 * x = x */
                 strncpy(p.src1, p.src2, 63); p.kind = 1; changed = 1;
             }
         } else if (strcmp(p.op, "/") == 0) {
             if (s2_is_num && v2 == 1) {
-                /* x / 1 = x */
                 p.kind = 1; changed = 1;
             } else if (strcmp(p.src1, p.src2) == 0) {
-                /* x / x = 1 (assuming x != 0, but compile-time we just do it) */
                 strncpy(p.src1, "1", 63); p.kind = 1; changed = 1;
             }
         } else if (strcmp(p.op, "%") == 0) {
             if (s2_is_num && v2 == 1) {
-                /* x % 1 = 0 */
                 strncpy(p.src1, "0", 63); p.kind = 1; changed = 1;
             } else if (strcmp(p.src1, p.src2) == 0) {
-                /* x % x = 0 */
                 strncpy(p.src1, "0", 63); p.kind = 1; changed = 1;
             }
         }
@@ -231,9 +234,7 @@ static void algebraic_simplification(void) {
     }
 }
 
-/* ---- PASS: strength reduction ----
-   x * 2 -> x + x
-   2 * x -> x + x */
+/* ---- PASS: strength reduction ---- */
 static void strength_reduction(void) {
     int i;
     for (i = 0; i < opt_len; i++) {
@@ -247,13 +248,11 @@ static void strength_reduction(void) {
         int s2_num = is_number(p.src2);
 
         if (s2_num && atol(p.src2) == 2) {
-            /* x * 2 -> x + x */
             strcpy(p.op, "+");
             strncpy(p.src2, p.src1, 63);
             rebuild(i, &p);
             stat_strength_red++;
         } else if (s1_num && atol(p.src1) == 2) {
-            /* 2 * x -> x + x */
             strncpy(p.src1, p.src2, 63);
             strcpy(p.op, "+");
             rebuild(i, &p);
@@ -262,9 +261,9 @@ static void strength_reduction(void) {
     }
 }
 
-/* ---- PASS: constant propagation (local) ----
-   track vars assigned constants, substitute into later uses */
+/* ---- prop / copy maps (shared infrastructure) ---- */
 #define MAX_PROPS 512
+
 typedef struct { char name[64]; char value[64]; } PropEntry;
 static PropEntry prop_map[MAX_PROPS];
 static int prop_count = 0;
@@ -303,13 +302,35 @@ static void prop_invalidate(const char *name) {
 
 static void prop_clear(void) { prop_count = 0; }
 
+/* when entering a loop, any var that gets reassigned inside the
+   loop body is no longer known to be a constant. drop those
+   entries but keep ones that aren't modified in the loop — those
+   are still propagatable through the loop. */
+static void prop_invalidate_loop_writes(int loop_start, int loop_end) {
+    int i = 0;
+    while (i < prop_count) {
+        if (var_defined_in_range(prop_map[i].name, loop_start, loop_end)) {
+            prop_map[i] = prop_map[--prop_count];
+        } else {
+            i++;
+        }
+    }
+}
+
 static void constant_propagation(void) {
     int i;
     prop_clear();
     find_jump_targets();
+    scan_loops();
 
     for (i = 0; i < opt_len; i++) {
-        if (jump_target[i]) prop_clear();
+        /* loop entry: invalidate only vars that get written in the loop */
+        if (loop_head[i]) {
+            prop_invalidate_loop_writes(i, loop_end_of[i]);
+        } else if (jump_target[i]) {
+            /* non-loop jump target: stay conservative, clear everything */
+            prop_clear();
+        }
 
         if (opt_buf[i].type == INS_IF) {
             char s1[64], op[8], s2[64];
@@ -359,8 +380,7 @@ static void constant_propagation(void) {
     }
 }
 
-/* ---- PASS: copy propagation (local) ----
-   if t1 = a, replace later uses of t1 with a (within same block) */
+/* ---- PASS: copy propagation (local, loop-aware) ---- */
 #define MAX_COPIES 512
 typedef struct { char from[64]; char to[64]; } CopyEntry;
 static CopyEntry copy_map[MAX_COPIES];
@@ -368,7 +388,6 @@ static int copy_count = 0;
 
 static void copy_set(const char *from, const char *to) {
     int i;
-    /* if from already has an entry, update it */
     for (i = 0; i < copy_count; i++) {
         if (strcmp(copy_map[i].from, from) == 0) {
             strncpy(copy_map[i].to, to, 63);
@@ -389,7 +408,6 @@ static const char *copy_get(const char *from) {
     return NULL;
 }
 
-/* if someone redefines a variable, any copies pointing to/from it are stale */
 static void copy_invalidate(const char *name) {
     int i = 0;
     while (i < copy_count) {
@@ -403,16 +421,32 @@ static void copy_invalidate(const char *name) {
 
 static void copy_clear(void) { copy_count = 0; }
 
+static void copy_invalidate_loop_writes(int loop_start, int loop_end) {
+    int i = 0;
+    while (i < copy_count) {
+        if (var_defined_in_range(copy_map[i].from, loop_start, loop_end) ||
+            var_defined_in_range(copy_map[i].to,   loop_start, loop_end)) {
+            copy_map[i] = copy_map[--copy_count];
+        } else {
+            i++;
+        }
+    }
+}
+
 static void copy_propagation(void) {
     int i;
     copy_clear();
     find_jump_targets();
+    scan_loops();
 
     for (i = 0; i < opt_len; i++) {
-        if (jump_target[i]) copy_clear();
+        if (loop_head[i]) {
+            copy_invalidate_loop_writes(i, loop_end_of[i]);
+        } else if (jump_target[i]) {
+            copy_clear();
+        }
 
         if (opt_buf[i].type == INS_IF) {
-            /* substitute copies in condition */
             char s1[64], op[8], s2[64];
             if (sscanf(opt_buf[i].text, "%63s %7s %63s", s1, op, s2) == 3) {
                 const char *r1 = copy_get(s1);
@@ -435,7 +469,6 @@ static void copy_propagation(void) {
         parse_tac(opt_buf[i].text, &p);
         if (p.kind == 0) continue;
 
-        /* substitute in operands */
         int changed = 0;
         if (p.kind >= 1) {
             const char *r1 = copy_get(p.src1);
@@ -447,11 +480,9 @@ static void copy_propagation(void) {
         }
         if (changed) rebuild(i, &p);
 
-        /* re-parse and record copies */
         parse_tac(opt_buf[i].text, &p);
         copy_invalidate(p.dest);
 
-        /* if it's a simple copy (dest = src, no op), record it */
         if (p.kind == 1 && !is_number(p.src1)) {
             copy_set(p.dest, p.src1);
         }
@@ -527,8 +558,7 @@ static void common_subexpr_elim(void) {
     }
 }
 
-/* ---- PASS: dead code elimination ----
-   remove assignments to temps that nobody reads */
+/* ---- PASS: dead code elimination ---- */
 static int is_used_elsewhere(const char *name, int def_idx) {
     int i;
     for (i = 0; i < opt_len; i++) {
@@ -557,7 +587,6 @@ static void dead_code_elim(void) {
 
     for (i = 0; i < opt_len; i++) alive[i] = 1;
 
-    /* keep removing dead temps until nothing changes */
     int changed = 1;
     while (changed) {
         changed = 0;
@@ -579,7 +608,6 @@ static void dead_code_elim(void) {
         }
     }
 
-    /* compact the buffer and remap jump targets */
     j = 0;
     for (i = 0; i < opt_len; i++) {
         if (alive[i]) {
@@ -604,18 +632,20 @@ static void dead_code_elim(void) {
     opt_len = j;
 }
 
-/* ---- PASS: global constant propagation ----
-   multiple iterations across the whole TAC until nothing changes.
-   unlike local const prop which resets at every jump target,
-   this one runs repeated passes over the entire buffer. */
+/* ---- PASS: global constant propagation ---- */
 static void global_constant_propagation(void) {
     int changed = 1;
     while (changed) {
         changed = 0;
         prop_clear();
+        scan_loops();
 
         int i;
         for (i = 0; i < opt_len; i++) {
+            if (loop_head[i]) {
+                prop_invalidate_loop_writes(i, loop_end_of[i]);
+            }
+
             if (opt_buf[i].type == INS_IF) {
                 char s1[64], op[8], s2[64];
                 if (sscanf(opt_buf[i].text, "%63s %7s %63s", s1, op, s2) == 3) {
@@ -656,7 +686,6 @@ static void global_constant_propagation(void) {
                 }
             }
 
-            /* re-parse to record */
             parse_tac(opt_buf[i].text, &p);
             if (p.kind == 1 && is_number(p.src1)) {
                 prop_set(p.dest, p.src1);
@@ -667,22 +696,87 @@ static void global_constant_propagation(void) {
     }
 }
 
-/* ---- PASS: loop-invariant code motion ----
-   find loops (back edges: goto that jumps to an earlier instruction),
-   identify assignments inside the loop whose operands don't change
-   within the loop body, and move them before the loop header */
+/* ---- PASS: constant-condition folding ----
+   if both operands of INS_IF are numeric, evaluate the compare
+   at compile time. true → unconditional goto; false → delete. */
+static int eval_cond(long a, const char *op, long b) {
+    if (strcmp(op, "<")  == 0) return a <  b;
+    if (strcmp(op, ">")  == 0) return a >  b;
+    if (strcmp(op, "<=") == 0) return a <= b;
+    if (strcmp(op, ">=") == 0) return a >= b;
+    if (strcmp(op, "==") == 0) return a == b;
+    if (strcmp(op, "!=") == 0) return a != b;
+    return -1;
+}
+
+static void fold_constant_conditions(void) {
+    int alive[MAX_CODE];
+    int remap[MAX_CODE];
+    int i, j;
+
+    for (i = 0; i < opt_len; i++) alive[i] = 1;
+
+    for (i = 0; i < opt_len; i++) {
+        if (opt_buf[i].type != INS_IF) continue;
+
+        char s1[64], op[8], s2[64];
+        if (sscanf(opt_buf[i].text, "%63s %7s %63s", s1, op, s2) != 3) continue;
+        if (!is_number(s1) || !is_number(s2)) continue;
+
+        int r = eval_cond(atol(s1), op, atol(s2));
+        if (r < 0) continue;
+
+        if (r == 1) {
+            /* always true: turn the conditional into an unconditional jump */
+            opt_buf[i].type = INS_GOTO;
+            opt_buf[i].text[0] = '\0';
+            stat_cond_fold++;
+        } else {
+            /* always false: drop it entirely, control falls through */
+            alive[i] = 0;
+            stat_cond_fold++;
+        }
+    }
+
+    int removed = 0;
+    for (i = 0; i < opt_len; i++) if (!alive[i]) removed++;
+    if (removed == 0) return;
+
+    j = 0;
+    for (i = 0; i < opt_len; i++) {
+        if (alive[i]) {
+            remap[i] = j;
+            if (j != i) opt_buf[j] = opt_buf[i];
+            j++;
+        }
+    }
+    for (i = opt_len - 1; i >= 0; i--) {
+        if (!alive[i]) {
+            int k = i + 1;
+            while (k < opt_len && !alive[k]) k++;
+            remap[i] = (k < opt_len) ? remap[k] : j;
+        }
+    }
+    for (i = 0; i < j; i++) {
+        if ((opt_buf[i].type == INS_IF || opt_buf[i].type == INS_GOTO) &&
+            opt_buf[i].target >= 0 && opt_buf[i].target < opt_len) {
+            opt_buf[i].target = remap[opt_buf[i].target];
+        }
+    }
+    opt_len = j;
+}
+
+/* ---- PASS: loop-invariant code motion (end-of-pipeline, once) ---- */
 static void loop_invariant_motion(void) {
     find_jump_targets();
 
     int i;
     for (i = 0; i < opt_len; i++) {
-        /* look for back edges: a goto that jumps backward */
         if (opt_buf[i].type != INS_GOTO) continue;
         int loop_start = opt_buf[i].target;
         if (loop_start < 0 || loop_start >= i) continue;
         int loop_end = i;
 
-        /* collect all vars that get defined inside the loop */
         char defined_in_loop[256][64];
         int def_count = 0;
         int j;
@@ -691,7 +785,6 @@ static void loop_invariant_motion(void) {
             ParsedTAC p;
             parse_tac(opt_buf[j].text, &p);
             if (p.kind >= 1 && p.dest[0] != '\0') {
-                /* check we haven't added this one already */
                 int dup = 0, k;
                 for (k = 0; k < def_count; k++)
                     if (strcmp(defined_in_loop[k], p.dest) == 0) { dup = 1; break; }
@@ -703,28 +796,23 @@ static void loop_invariant_motion(void) {
             }
         }
 
-        /* now check each instruction: is it invariant?
-           invariant = binary/copy where neither operand is defined inside the loop */
         for (j = loop_start; j <= loop_end; j++) {
             if (opt_buf[j].type != INS_TEXT) continue;
-            if (jump_target[j]) continue; /* don't move branch targets */
+            if (jump_target[j]) continue;
 
             ParsedTAC p;
             parse_tac(opt_buf[j].text, &p);
             if (p.kind == 0) continue;
-            if (!is_temp(p.dest)) continue; /* only move temporaries */
+            if (!is_temp(p.dest)) continue;
 
-            /* check if operands are loop-invariant */
             int invariant = 1;
             int k;
             for (k = 0; k < def_count; k++) {
                 if (p.kind >= 1 && strcmp(p.src1, defined_in_loop[k]) == 0) { invariant = 0; break; }
                 if (p.kind == 2 && strcmp(p.src2, defined_in_loop[k]) == 0) { invariant = 0; break; }
             }
-            /* also the dest itself shouldn't be used before this point in the loop */
             if (!invariant) continue;
 
-            /* also check dest isn't defined more than once in the loop */
             int def_times = 0;
             for (k = loop_start; k <= loop_end; k++) {
                 if (opt_buf[k].type != INS_TEXT) continue;
@@ -734,14 +822,11 @@ static void loop_invariant_motion(void) {
             }
             if (def_times != 1) continue;
 
-            /* move it: shift everything from loop_start to j-1 down by one,
-               put the invariant instruction at loop_start */
             Instruction saved = opt_buf[j];
             for (k = j; k > loop_start; k--)
                 opt_buf[k] = opt_buf[k - 1];
             opt_buf[loop_start] = saved;
 
-            /* adjust jump targets that were in the shifted range */
             for (k = 0; k < opt_len; k++) {
                 if (opt_buf[k].type == INS_IF || opt_buf[k].type == INS_GOTO) {
                     int t = opt_buf[k].target;
@@ -752,15 +837,12 @@ static void loop_invariant_motion(void) {
             }
 
             stat_loop_inv++;
-            /* only move one per loop per pass to keep it simple */
             break;
         }
     }
 }
 
-/* ---- PASS: unreachable code elimination ----
-   mark all reachable instructions starting from 0 via fall-through
-   and jumps; anything unmarked is dead */
+/* ---- PASS: unreachable code elimination ---- */
 static void unreachable_code_elim(void) {
     int reachable[MAX_CODE];
     int remap[MAX_CODE];
@@ -768,7 +850,6 @@ static void unreachable_code_elim(void) {
 
     memset(reachable, 0, sizeof(int) * opt_len);
 
-    /* BFS/DFS from instruction 0 */
     int stack[MAX_CODE];
     int sp = 0;
     stack[sp++] = 0;
@@ -780,28 +861,23 @@ static void unreachable_code_elim(void) {
         reachable[idx] = 1;
 
         if (opt_buf[idx].type == INS_GOTO) {
-            /* unconditional jump: only the target is reachable, not fall-through */
             if (opt_buf[idx].target >= 0)
                 stack[sp++] = opt_buf[idx].target;
         } else if (opt_buf[idx].type == INS_IF) {
-            /* conditional: both target and fall-through are reachable */
             if (opt_buf[idx].target >= 0)
                 stack[sp++] = opt_buf[idx].target;
             stack[sp++] = idx + 1;
         } else {
-            /* normal instruction: fall through */
             stack[sp++] = idx + 1;
         }
     }
 
-    /* count how many we're removing */
     int removed = 0;
     for (i = 0; i < opt_len; i++)
         if (!reachable[i]) removed++;
 
     if (removed == 0) return;
 
-    /* compact */
     j = 0;
     for (i = 0; i < opt_len; i++) {
         if (reachable[i]) {
@@ -810,7 +886,6 @@ static void unreachable_code_elim(void) {
             j++;
         }
     }
-    /* dead entries map to next reachable */
     for (i = opt_len - 1; i >= 0; i--) {
         if (!reachable[i]) {
             int k = i + 1;
@@ -818,7 +893,6 @@ static void unreachable_code_elim(void) {
             remap[i] = (k < opt_len) ? remap[k] : j;
         }
     }
-    /* fix jump targets */
     for (i = 0; i < j; i++) {
         if ((opt_buf[i].type == INS_IF || opt_buf[i].type == INS_GOTO) &&
             opt_buf[i].target >= 0 && opt_buf[i].target < opt_len) {
@@ -830,7 +904,26 @@ static void unreachable_code_elim(void) {
     opt_len = j;
 }
 
-/* main optimization driver */
+/* ---- total stats, used to detect when the fixed-point loop is done ---- */
+static int total_stats(void) {
+    return stat_const_fold + stat_const_prop + stat_cse + stat_dead_elim +
+           stat_algebraic + stat_copy_prop + stat_strength_red +
+           stat_global_const + stat_cond_fold + stat_unreachable;
+}
+
+/* main optimization driver ----
+   the core insight: each pass either SUBSTITUTES or EVALUATES.
+   substitutions (const prop, copy prop) expose new evaluation
+   opportunities (fold, simplify, cond-fold). evaluation in turn
+   may dead-code whole branches, exposing more substitution
+   opportunities. so we loop the whole pipeline until nothing
+   moves — this catches chains like:
+     x = 10; y = x;  ->  y = 10  (const prop)
+                      ->  nothing new to do for y
+     if (x > 5) ...  ->  if (10 > 5)  (const prop)
+                     ->  goto L      (cond fold)
+                     ->  dead branch dropped  (unreachable)
+   running once only catches the first link. */
 void optimize(void) {
     memcpy(opt_buf, code_buf, sizeof(Instruction) * code_len);
     opt_len = code_len;
@@ -845,24 +938,43 @@ void optimize(void) {
     stat_global_const = 0;
     stat_loop_inv = 0;
     stat_unreachable = 0;
+    stat_cond_fold = 0;
 
-    /* --- local passes --- */
-    constant_folding();
-    algebraic_simplification();
-    strength_reduction();
-    constant_propagation();
-    copy_propagation();
-    constant_folding();   /* propagation might've created new folding chances */
-    algebraic_simplification();
-    common_subexpr_elim();
-    dead_code_elim();
+    int iteration = 0;
+    int last_stats = -1;
+    int last_len = -1;
 
-    /* --- global passes --- */
-    global_constant_propagation();
-    constant_folding();   /* global prop might expose more folding */
+    while (iteration < 20) {
+        int snap_stats = total_stats();
+        int snap_len = opt_len;
+
+        constant_folding();
+        algebraic_simplification();
+        strength_reduction();
+        constant_propagation();
+        copy_propagation();
+        constant_folding();           /* what prop exposed */
+        algebraic_simplification();   /* what folding exposed */
+        common_subexpr_elim();
+        global_constant_propagation();
+        constant_folding();           /* what global prop exposed */
+        fold_constant_conditions();   /* decide branches with numeric operands */
+        unreachable_code_elim();      /* drop branches that cond-fold made dead */
+        dead_code_elim();
+
+        int new_stats = total_stats();
+        if (new_stats == snap_stats && opt_len == snap_len) break;
+
+        last_stats = new_stats;
+        last_len = opt_len;
+        iteration++;
+    }
+
+    /* loop-invariant motion runs once, outside the fixed point —
+       moving code shouldn't trigger another fold round. */
     loop_invariant_motion();
     unreachable_code_elim();
-    dead_code_elim();     /* final cleanup */
+    dead_code_elim();
 }
 
 void print_opt_tac(void) {

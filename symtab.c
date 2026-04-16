@@ -2,18 +2,52 @@
 
 SymEntry *sym_table[SYM_SIZE];
 
+/* current scope depth — 0 at start (file/global), bumped on each { */
+static int current_scope = 0;
+
 static unsigned sym_hash(const char *s) {
     unsigned h = 5381;
     while (*s) h = h * 33 ^ (unsigned char)*s++;
     return h % SYM_SIZE;
 }
 
-/* try to insert; returns 1 if name already exists */
+int sym_current_scope(void) {
+    return current_scope;
+}
+
+void sym_push_scope(void) {
+    current_scope++;
+}
+
+/* on scope exit, walk every hash bucket and unlink anything
+   declared at the scope we're leaving. the rest stays put. */
+void sym_pop_scope(void) {
+    if (current_scope <= 0) return;
+    int i;
+    for (i = 0; i < SYM_SIZE; i++) {
+        SymEntry **pp = &sym_table[i];
+        while (*pp) {
+            SymEntry *e = *pp;
+            if (e->scope_level == current_scope) {
+                *pp = e->next;
+                free(e);
+            } else {
+                pp = &e->next;
+            }
+        }
+    }
+    current_scope--;
+}
+
+/* try to insert; returns 1 if a name already exists at the SAME scope.
+   inner scopes shadowing outer ones is legal — e.g. test11 has
+   `int a;` at global and `int a;` inside main, which is fine. */
 int sym_declare(const char *name, int line, int col) {
     unsigned h = sym_hash(name);
     SymEntry *e = sym_table[h];
     while (e) {
-        if (strcmp(e->name, name) == 0) return 1;
+        if (strcmp(e->name, name) == 0 && e->scope_level == current_scope)
+            return 1;
         e = e->next;
     }
     e = (SymEntry *)malloc(sizeof(SymEntry));
@@ -24,29 +58,38 @@ int sym_declare(const char *name, int line, int col) {
     e->decl_col = col;
     e->is_initialized = 0;
     e->is_used = 0;
+    e->scope_level = current_scope;
     e->next = sym_table[h];
     sym_table[h] = e;
     return 0;
 }
 
+/* walk the hash chain and return the innermost-scope match.
+   we prefer deeper scopes because those shadow outer ones. */
 int sym_lookup(const char *name) {
     unsigned h = sym_hash(name);
     SymEntry *e = sym_table[h];
+    int best = -1;
     while (e) {
-        if (strcmp(e->name, name) == 0) return 1;
+        if (strcmp(e->name, name) == 0 && e->scope_level > best)
+            best = e->scope_level;
         e = e->next;
     }
-    return 0;
+    return (best >= 0);
 }
 
 SymEntry *sym_find(const char *name) {
     unsigned h = sym_hash(name);
     SymEntry *e = sym_table[h];
+    SymEntry *best = NULL;
     while (e) {
-        if (strcmp(e->name, name) == 0) return e;
+        if (strcmp(e->name, name) == 0) {
+            if (!best || e->scope_level > best->scope_level)
+                best = e;
+        }
         e = e->next;
     }
-    return NULL;
+    return best;
 }
 
 /* flags var as read; warns if never assigned */
