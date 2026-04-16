@@ -324,11 +324,8 @@ static void constant_propagation(void) {
     scan_loops();
 
     for (i = 0; i < opt_len; i++) {
-        /* loop entry: invalidate only vars that get written in the loop */
-        if (loop_head[i]) {
-            prop_invalidate_loop_writes(i, loop_end_of[i]);
-        } else if (jump_target[i]) {
-            /* non-loop jump target: stay conservative, clear everything */
+        /* non-loop jump target: stay conservative, clear everything */
+        if (!loop_head[i] && jump_target[i]) {
             prop_clear();
         }
 
@@ -342,6 +339,10 @@ static void constant_propagation(void) {
                 if (v2 && is_number(v2)) { strncpy(s2, v2, 63); changed = 1; stat_const_prop++; }
                 if (changed)
                     snprintf(opt_buf[i].text, sizeof(opt_buf[i].text), "%s %s %s", s1, op, s2);
+            }
+            /* invalidate loop-written vars AFTER propagating into the condition */
+            if (loop_head[i]) {
+                prop_invalidate_loop_writes(i, loop_end_of[i]);
             }
             continue;
         }
@@ -642,8 +643,8 @@ static void global_constant_propagation(void) {
 
         int i;
         for (i = 0; i < opt_len; i++) {
-            if (loop_head[i]) {
-                prop_invalidate_loop_writes(i, loop_end_of[i]);
+            if (!loop_head[i] && jump_target[i]) {
+                /* non-loop jump target: handled conservatively elsewhere */
             }
 
             if (opt_buf[i].type == INS_IF) {
@@ -659,6 +660,10 @@ static void global_constant_propagation(void) {
                         stat_global_const++;
                         changed = 1;
                     }
+                }
+                /* invalidate loop-written vars AFTER propagating into the condition */
+                if (loop_head[i]) {
+                    prop_invalidate_loop_writes(i, loop_end_of[i]);
                 }
                 continue;
             }
