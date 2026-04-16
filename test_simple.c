@@ -1,7 +1,9 @@
 int main() {
-    int i, j, sum = 0;
-    for (i = 0, j = 10; i < j; i++, j--) {
-        sum = sum + i + j;
-    }
-    return sum;
+    int a;
+    int b;
+    int c;
+    a = 3;
+    b = 5;
+    c = a + b;
+    return 0;
 }

@@ -150,6 +150,8 @@ extern int stat_global_const;
 extern int stat_loop_inv;
 extern int stat_unreachable;
 extern int stat_cond_fold;       /* compile-time resolved branch conditions */
+extern int stat_loop_unroll;
+extern int stat_loop_jam;
 
 void optimize(void);
 void print_opt_tac(void);

@@ -16,6 +16,8 @@ int stat_global_const = 0;
 int stat_loop_inv = 0;
 int stat_unreachable = 0;
 int stat_cond_fold = 0;
+int stat_loop_unroll = 0;
+int stat_loop_jam = 0;
 
 /* parsed form of a single TAC instruction */
 typedef struct {
@@ -324,8 +326,11 @@ static void constant_propagation(void) {
     scan_loops();
 
     for (i = 0; i < opt_len; i++) {
-        /* non-loop jump target: stay conservative, clear everything */
-        if (!loop_head[i] && jump_target[i]) {
+        /* loop entry: invalidate only vars that get written in the loop */
+        if (loop_head[i]) {
+            prop_invalidate_loop_writes(i, loop_end_of[i]);
+        } else if (jump_target[i]) {
+            /* non-loop jump target: stay conservative, clear everything */
             prop_clear();
         }
 
@@ -339,10 +344,6 @@ static void constant_propagation(void) {
                 if (v2 && is_number(v2)) { strncpy(s2, v2, 63); changed = 1; stat_const_prop++; }
                 if (changed)
                     snprintf(opt_buf[i].text, sizeof(opt_buf[i].text), "%s %s %s", s1, op, s2);
-            }
-            /* invalidate loop-written vars AFTER propagating into the condition */
-            if (loop_head[i]) {
-                prop_invalidate_loop_writes(i, loop_end_of[i]);
             }
             continue;
         }
@@ -643,8 +644,8 @@ static void global_constant_propagation(void) {
 
         int i;
         for (i = 0; i < opt_len; i++) {
-            if (!loop_head[i] && jump_target[i]) {
-                /* non-loop jump target: handled conservatively elsewhere */
+            if (loop_head[i]) {
+                prop_invalidate_loop_writes(i, loop_end_of[i]);
             }
 
             if (opt_buf[i].type == INS_IF) {
@@ -660,10 +661,6 @@ static void global_constant_propagation(void) {
                         stat_global_const++;
                         changed = 1;
                     }
-                }
-                /* invalidate loop-written vars AFTER propagating into the condition */
-                if (loop_head[i]) {
-                    prop_invalidate_loop_writes(i, loop_end_of[i]);
                 }
                 continue;
             }
@@ -917,6 +914,190 @@ static int total_stats(void) {
            stat_global_const + stat_cond_fold + stat_unreachable;
 }
 
+
+/* ---- PASS: loop unrolling ----
+   Detect small loops with constant bounds and duplicate their body. */
+
+
+/* ---- PASS: loop unrolling ---- */
+static int loop_unroll(void) {
+    int changed = 0;
+    scan_loops();
+    int i;
+    for (i = 0; i < opt_len; i++) {
+        if (!loop_head[i]) continue;
+        int head = i;
+        int end = loop_end_of[i];
+        if (opt_buf[head].type != INS_IF || opt_buf[head+1].type != INS_GOTO) continue;
+        
+        int break_target = opt_buf[head+1].target;
+        char var[64], op[8], limit_str[64];
+        if (sscanf(opt_buf[head].text, "%63s %7s %63s", var, op, limit_str) != 3) continue;
+        if (!is_number(limit_str)) continue;
+        long limit = atol(limit_str);
+        
+        long start_val = 0;
+        int init_idx = -1;
+        int j;
+        for (j = head - 1; j >= 0; j--) {
+            if (opt_buf[j].type == INS_IF || opt_buf[j].type == INS_GOTO) break;
+            if (opt_buf[j].type == INS_TEXT) {
+                char d[64], s[64];
+                if (sscanf(opt_buf[j].text, "%63s = %63s", d, s) == 2 && strcmp(d, var) == 0 && is_number(s)) {
+                    start_val = atol(s);
+                    init_idx = j;
+                    break;
+                }
+            }
+        }
+        if (init_idx == -1) continue;
+        
+        long step = 0;
+        int inc_idx = -1;
+        for (j = head+2; j < end; j++) {
+            char t1[64], s1[64], opp[8], s2[64], dest[64];
+            if (sscanf(opt_buf[j].text, "%63s = %63s %7s %63s", t1, s1, opp, s2) == 4 && strcmp(opp, "+") == 0 && strcmp(s1, var) == 0 && is_number(s2)) {
+                step = atol(s2);
+                if (j + 1 < end && sscanf(opt_buf[j+1].text, "%63s = %63s", dest, s1) == 2 && strcmp(s1, t1) == 0 && strcmp(dest, var) == 0) {
+                    inc_idx = j;
+                    break;
+                }
+            }
+        }
+        if (inc_idx == -1 || step <= 0) continue;
+        
+        long iters = 0, cur = start_val;
+        if (strcmp(op, "<") == 0) while (cur < limit) { cur += step; iters++; }
+        else if (strcmp(op, "<=") == 0) while (cur <= limit) { cur += step; iters++; }
+        else continue;
+        
+        if (iters == 0 || iters > 15) continue;
+        
+        Instruction new_body[MAX_CODE];
+        int nlen = 0;
+        long iter_val = start_val;
+        int k;
+        for (k = 0; k < iters; k++) {
+            snprintf(new_body[nlen].text, 256, "%s = %ld", var, iter_val);
+            new_body[nlen].type = INS_TEXT; new_body[nlen].target = -1; nlen++;
+            for (j = head+2; j < end; j++) {
+                if (j == inc_idx || j == inc_idx+1) continue;
+                new_body[nlen] = opt_buf[j];
+                if (new_body[nlen].target >= head+2 && new_body[nlen].target < end) {
+                    new_body[nlen].target += nlen - (j - head - 2);
+                }
+                nlen++;
+            }
+            iter_val += step;
+        }
+        snprintf(new_body[nlen].text, 256, "%s = %ld", var, iter_val);
+        new_body[nlen].type = INS_TEXT; new_body[nlen].target = -1; nlen++;
+        
+        int diff = nlen - (end - head + 1);
+        if (opt_len + diff >= MAX_CODE) continue;
+        
+        if (diff != 0) {
+            memmove(&opt_buf[end + 1 + diff], &opt_buf[end + 1], sizeof(Instruction) * (opt_len - end - 1));
+            for (j = 0; j < opt_len + diff; j++) {
+                if (j >= head && j < head + nlen) continue;
+                if (opt_buf[j].target > end) opt_buf[j].target += diff;
+                else if (opt_buf[j].target >= head && opt_buf[j].target <= end) opt_buf[j].target = break_target > end ? break_target + diff : break_target;
+            }
+        }
+        
+        memcpy(&opt_buf[head], new_body, sizeof(Instruction) * nlen);
+        opt_len += diff;
+        stat_loop_unroll++;
+        changed = 1;
+        break; // break and rescan
+    }
+    return changed;
+}
+
+/* ---- PASS: loop jamming ---- */
+static int loop_jam(void) {
+    int changed = 0;
+    scan_loops();
+    int i;
+    for (i = 0; i < opt_len; i++) {
+        if (!loop_head[i]) continue;
+        int e1 = loop_end_of[i];
+        if (opt_buf[i].type != INS_IF || opt_buf[i+1].type != INS_GOTO) continue;
+        int jump1 = opt_buf[i+1].target;
+        if (jump1 != e1 + 1) continue;
+        
+        // Find next loop
+        int j = jump1;
+        int init2 = -1;
+        if (j < opt_len && opt_buf[j].type == INS_TEXT) { init2 = j; j++; }
+        if (j >= opt_len || !loop_head[j]) continue;
+        
+        int e2 = loop_end_of[j];
+        if (opt_buf[j].type != INS_IF || opt_buf[j+1].type != INS_GOTO) continue;
+        int jump2 = opt_buf[j+1].target;
+        if (jump2 != e2 + 1) continue;
+        
+        // Check identical conditions
+        if (strcmp(opt_buf[i].text, opt_buf[j].text) != 0) {
+            // Might have different loop index vars but same bounds.
+            char v1[64], op1[8], l1[64], v2[64], op2[8], l2[64];
+            if (sscanf(opt_buf[i].text, "%63s %7s %63s", v1, op1, l1) == 3 &&
+                sscanf(opt_buf[j].text, "%63s %7s %63s", v2, op2, l2) == 3) {
+                if (strcmp(op1, op2) != 0 || strcmp(l1, l2) != 0) continue;
+            } else continue;
+        }
+        
+        // Perform Jamming/Fusion
+        Instruction fbody[MAX_CODE];
+        int flen = 0;
+        int k;
+        
+        if (init2 != -1) { fbody[flen++] = opt_buf[init2]; } // init for loop 2 BEFORE loop 1 header
+        fbody[flen++] = opt_buf[i];   // if L1
+        fbody[flen++] = opt_buf[i+1]; // goto B1
+        
+        // loop 1 body (except inc)
+        for (k = i+2; k < e1; k++) {
+            // Find L1 inc: typically last 2 instructions
+            if (k >= e1 - 2) break;
+            fbody[flen++] = opt_buf[k];
+        }
+        int l1_inc = k;
+        
+        // loop 2 body (except inc)
+        for (k = j+2; k < e2; k++) {
+            if (k >= e2 - 2) break;
+            fbody[flen++] = opt_buf[k];
+        }
+        int l2_inc = k;
+        
+        for (k = l1_inc; k < e1; k++) fbody[flen++] = opt_buf[k]; // L1 inc
+        for (k = l2_inc; k < e2; k++) fbody[flen++] = opt_buf[k]; // L2 inc
+        fbody[flen++] = opt_buf[e1]; // goto L1
+        
+        int total_old = e2 - i + 1;
+        int diff = flen - total_old;
+        if (diff != 0) {
+            memmove(&opt_buf[e2 + 1 + diff], &opt_buf[e2 + 1], sizeof(Instruction) * (opt_len - e2 - 1));
+            for (k = 0; k < opt_len + diff; k++) {
+                if (k >= i && k < i + flen) continue;
+                if (opt_buf[k].target > e2) opt_buf[k].target += diff;
+            }
+        }
+        
+        memcpy(&opt_buf[i], fbody, sizeof(Instruction) * flen);
+        // Fix up branch targets
+        opt_buf[init2 != -1 ? i+1 : i].target = i + flen; // break target
+        opt_buf[i + flen - 1].target = init2 != -1 ? i+1 : i; // goto header
+        
+        opt_len += diff;
+        stat_loop_jam++;
+        changed = 1;
+        break; // restart
+    }
+    return changed;
+}
+
 /* main optimization driver ----
    the core insight: each pass either SUBSTITUTES or EVALUATES.
    substitutions (const prop, copy prop) expose new evaluation
@@ -945,6 +1126,8 @@ void optimize(void) {
     stat_loop_inv = 0;
     stat_unreachable = 0;
     stat_cond_fold = 0;
+    stat_loop_unroll = 0;
+    stat_loop_jam = 0;
 
     int iteration = 0;
     int last_stats = -1;
@@ -978,6 +1161,8 @@ void optimize(void) {
 
     /* loop-invariant motion runs repeatedly until no changes made */
     while (loop_invariant_motion());
+    while (loop_jam());
+    while (loop_unroll());
     unreachable_code_elim();
     dead_code_elim();
 }

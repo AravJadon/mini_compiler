@@ -278,6 +278,8 @@ static void print_phase5(void) {
     printf("    - Global Const Propagation: %d\n", stat_global_const);
     printf("    - Constant-Condition Fold:  %d\n", stat_cond_fold);
     printf("    - Loop-Invariant Motion:    %d\n", stat_loop_inv);
+    printf("    - Loop Unrolling:           %d\n", stat_loop_unroll);
+    printf("    - Loop Jamming:             %d\n", stat_loop_jam);
     printf("    - Unreachable Code Removal: %d\n", stat_unreachable);
     printf("\n    Total instructions removed: %d\n", code_len - opt_len);
     printf("\n  Optimized TAC (%d instructions):\n\n", opt_len);
