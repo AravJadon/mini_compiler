@@ -192,7 +192,15 @@ static void print_phase2(void) {
                             "error", "%s", syntax_errors[i].message);
     } else {
         printf("  [OK] Syntax analysis completed successfully.\n");
-        printf("  The input program is syntactically valid.\n");
+        printf("  The input program is syntactically valid.\n\n");
+
+        /* show the AST we built during parsing */
+        printf("  Abstract Syntax Tree:\n");
+        printf("  ---------------------\n");
+        if (ast_root)
+            ast_print(ast_root, 1);
+        else
+            printf("    (empty — nothing to show)\n");
     }
     printf("\n");
 }

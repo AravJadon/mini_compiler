@@ -1,5 +1,72 @@
 %{
 #include "common.h"
+
+/* ---- AST construction helpers (parser-local) ----
+   Grammar actions build an AST fragment for each reduction.
+   Expressions carry their fragment up via AAttr->node / BAttr->node.
+   Statements don't have an %union slot for nodes, so they push
+   themselves onto the current "statement-list accumulator" node
+   sitting on top of ast_stmt_stack. LBRACE pushes a new empty
+   Block node; RBRACE pops it and hands the block up to whoever
+   opened it (function body, compound statement, case body, etc.).
+   The program-level accumulator is pushed once at start-up. */
+
+#define AST_STMT_STACK_MAX 64
+static ASTNode *ast_stmt_stack[AST_STMT_STACK_MAX];
+static int      ast_stmt_sp = 0;
+
+static void ast_push_block(ASTNode *block) {
+    if (ast_stmt_sp < AST_STMT_STACK_MAX)
+        ast_stmt_stack[ast_stmt_sp++] = block;
+}
+static ASTNode *ast_pop_block(void) {
+    if (ast_stmt_sp == 0) return NULL;
+    return ast_stmt_stack[--ast_stmt_sp];
+}
+static ASTNode *ast_top_block(void) {
+    if (ast_stmt_sp == 0) return NULL;
+    return ast_stmt_stack[ast_stmt_sp - 1];
+}
+static void ast_append_stmt(ASTNode *stmt) {
+    ASTNode *top = ast_top_block();
+    if (top && stmt) ast_add_child(top, stmt);
+}
+
+/* Switch-case bookkeeping: each switch pushes an AST "switch" node,
+   and each case's body reduces into its own block that is then
+   attached to the switch node. We reuse the same stmt-stack for
+   the case bodies — a CASE/DEFAULT pushes a new block before its
+   stmt_list and pops it back into a case_entry node afterward. */
+#define AST_SWITCH_STACK_MAX 32
+static ASTNode *ast_switch_stack[AST_SWITCH_STACK_MAX];
+static int      ast_switch_sp = 0;
+static void ast_push_switch(ASTNode *s) {
+    if (ast_switch_sp < AST_SWITCH_STACK_MAX)
+        ast_switch_stack[ast_switch_sp++] = s;
+}
+static ASTNode *ast_pop_switch(void) {
+    if (ast_switch_sp == 0) return NULL;
+    return ast_switch_stack[--ast_switch_sp];
+}
+static ASTNode *ast_top_switch(void) {
+    if (ast_switch_sp == 0) return NULL;
+    return ast_switch_stack[ast_switch_sp - 1];
+}
+
+/* Per-case label carried from the CASE/DEFAULT action to the
+   closing action that packages the case body. Stacked because
+   a case body can contain a nested switch. */
+#define AST_CASE_STACK_MAX 64
+static ASTNode *ast_case_label_stack[AST_CASE_STACK_MAX];
+static int      ast_case_label_sp = 0;
+static void ast_push_case_label(ASTNode *lbl) {
+    if (ast_case_label_sp < AST_CASE_STACK_MAX)
+        ast_case_label_stack[ast_case_label_sp++] = lbl;
+}
+static ASTNode *ast_pop_case_label(void) {
+    if (ast_case_label_sp == 0) return NULL;
+    return ast_case_label_stack[--ast_case_label_sp];
+}
 %}
 
 %define parse.error verbose
@@ -42,7 +109,17 @@
 %%
 
 program
-    : external_list
+    : {
+          /* push the top-level program block before any externals reduce.
+             each external (function def/proto/top-level stmt) appends
+             itself here. */
+          ast_push_block(ast_node("Program"));
+      }
+      external_list
+      {
+          /* pop the program block and hand it to ast_root. */
+          ast_root = ast_pop_block();
+      }
     ;
 
 external_list
@@ -57,6 +134,14 @@ external
     ;
 
 function_def
+<<<<<<< HEAD
+    : function_header compound_stmt
+      {
+          /* compound_stmt already appended its Block to the FunctionDef.
+             pop FunctionDef and hand it up to the enclosing scope. */
+          ASTNode *fn = ast_pop_block();
+          ast_append_stmt(fn);
+=======
     : TYPE ID LPAREN opt_param_list RPAREN compound_stmt
       {
           if (strcmp($1, "int") != 0) {
@@ -64,10 +149,37 @@ function_def
                   "Unsupported data type '%s'. Toy-C only supports 'int'", $1);
           }
           free($1); free($2);
+>>>>>>> 82293e5207a16fc5a1fd12c60419dc7d7bc64b74
       }
     ;
 
 function_proto
+<<<<<<< HEAD
+    : function_header SEMI
+      {
+          /* prototype: we pushed a FunctionDef-shaped node but since
+             there's no body, re-label it and append. */
+          ASTNode *fn = ast_pop_block();
+          strncpy(fn->label, "FunctionProto", sizeof(fn->label) - 1);
+          ast_append_stmt(fn);
+      }
+    ;
+
+function_header
+    : TYPE ID LPAREN
+      {
+          /* unified prefix for function_def and function_proto so bison
+             doesn't hit reduce/reduce conflicts choosing between them.
+             we push a FunctionDef block here; function_proto relabels
+             it post-hoc if no body follows. */
+          ASTNode *fn = ast_node("FunctionDef");
+          ast_add_child(fn, ast_leaf("return_type:int"));
+          ast_add_child(fn, ast_leaf("name:%s", $2));
+          ast_push_block(fn);
+          free($2);
+      }
+      opt_param_list RPAREN
+=======
     : TYPE ID LPAREN opt_param_list RPAREN SEMI
       {
           if (strcmp($1, "int") != 0) {
@@ -76,6 +188,7 @@ function_proto
           }
           free($1); free($2);
       }
+>>>>>>> 82293e5207a16fc5a1fd12c60419dc7d7bc64b74
     ;
 
 opt_param_list
@@ -99,20 +212,40 @@ param_decl
                   emit_diagnostic("<stdin>", prev->decl_line, prev->decl_col,
                       "note", "previous definition of '%s' was here", $2);
           }
+<<<<<<< HEAD
+          /* append a Param node to the enclosing FunctionDef/Proto block */
+          ASTNode *p = ast_node("Param");
+          ast_add_child(p, ast_leaf("type:int"));
+          ast_add_child(p, ast_leaf("name:%s", $2));
+          ast_append_stmt(p);
+          free($2);
+=======
           if (strcmp($1, "int") != 0) {
               log_sem_error(@1.first_line, @1.first_column,
                   "Unsupported data type '%s'. Toy-C only supports 'int'", $1);
           }
           free($1); free($2);
+>>>>>>> 82293e5207a16fc5a1fd12c60419dc7d7bc64b74
       }
     ;
 
 compound_stmt
-    : LBRACE stmt_list RBRACE
-    | LBRACE stmt_list error RBRACE
+    : LBRACE push_block stmt_list RBRACE
       {
-          log_syntax_error(@3.first_line, @3.first_column,
+          /* pop the completed Block and append to the enclosing
+             accumulator. FunctionDef's closing action overrides this
+             by using the returned node directly — but we do the
+             append unconditionally here. FunctionDef's logic below
+             has been adjusted to accommodate. */
+          ASTNode *blk = ast_pop_block();
+          ast_append_stmt(blk);
+      }
+    | LBRACE push_block stmt_list error RBRACE
+      {
+          log_syntax_error(@4.first_line, @4.first_column,
               "expected '}' at end of compound statement");
+          ASTNode *blk = ast_pop_block();
+          ast_append_stmt(blk);
           yyerrok;
       }
     ;
@@ -124,16 +257,33 @@ stmt_list
 
 statement
     : non_if_stmt
-    | IF LPAREN bexpr RPAREN M statement %prec LOWER_THAN_ELSE
+    | IF LPAREN bexpr RPAREN M push_capture statement %prec LOWER_THAN_ELSE
       {
           backpatch($3->truelist, $5);
           backpatch($3->falselist, nextinstr());
+
+          ASTNode *cap = ast_pop_block();
+          ASTNode *then_body = (cap->nchildren == 1) ? cap->children[0] : cap;
+          ASTNode *ifn = ast_node("If");
+          ast_add_child(ifn, ast_node1("Cond", $3->node));
+          ast_add_child(ifn, ast_node1("Then", then_body));
+          ast_append_stmt(ifn);
       }
-    | IF LPAREN bexpr RPAREN M statement ELSE N M statement
+    | IF LPAREN bexpr RPAREN M push_capture statement ELSE N M push_capture statement
       {
           backpatch($3->truelist, $5);
-          backpatch($3->falselist, $9);
-          backpatch($8, nextinstr());
+          backpatch($3->falselist, $10);
+          backpatch($9, nextinstr());
+
+          ASTNode *cap_else = ast_pop_block();
+          ASTNode *cap_then = ast_pop_block();
+          ASTNode *then_body = (cap_then->nchildren == 1) ? cap_then->children[0] : cap_then;
+          ASTNode *else_body = (cap_else->nchildren == 1) ? cap_else->children[0] : cap_else;
+          ASTNode *ifn = ast_node("If");
+          ast_add_child(ifn, ast_node1("Cond", $3->node));
+          ast_add_child(ifn, ast_node1("Then", then_body));
+          ast_add_child(ifn, ast_node1("Else", else_body));
+          ast_append_stmt(ifn);
       }
     | IF LPAREN error RPAREN M statement %prec LOWER_THAN_ELSE
       {
@@ -153,15 +303,7 @@ statement
               "expected '(' after 'if'");
           yyerrok;
       }
-    | WHILE M LPAREN bexpr RPAREN
-      {
-          /* push break/continue frames right before the body.
-             continue targets the M at position $2, break targets
-             whatever comes after the body. */
-          breaklist_push();
-          continuelist_push();
-      }
-      M statement %prec LOWER_THAN_ELSE
+    | WHILE M LPAREN bexpr RPAREN loop_enter M statement %prec LOWER_THAN_ELSE
       {
           backpatch($4->truelist, $7);
           emit_goto($2);
@@ -169,6 +311,13 @@ statement
           backpatch($4->falselist, end_lbl);
           breaklist_pop(end_lbl);
           continuelist_pop($2);
+
+          ASTNode *cap = ast_pop_block();
+          ASTNode *body = (cap->nchildren == 1) ? cap->children[0] : cap;
+          ASTNode *wh = ast_node("While");
+          ast_add_child(wh, ast_node1("Cond", $4->node));
+          ast_add_child(wh, ast_node1("Body", body));
+          ast_append_stmt(wh);
       }
     | WHILE M LPAREN error RPAREN M statement
       {
@@ -182,21 +331,36 @@ statement
               "expected '(' after 'while'");
           yyerrok;
       }
-    | DO M
-      {
-          breaklist_push();
-          continuelist_push();
-      }
-      statement WHILE M LPAREN bexpr RPAREN SEMI
+    | DO M loop_enter statement WHILE M LPAREN bexpr RPAREN SEMI
       {
           backpatch($8->truelist, $2);
           int end_lbl = nextinstr();
           backpatch($8->falselist, end_lbl);
           breaklist_pop(end_lbl);
           continuelist_pop($6);
+
+          ASTNode *cap = ast_pop_block();
+          ASTNode *body = (cap->nchildren == 1) ? cap->children[0] : cap;
+          ASTNode *dw = ast_node("DoWhile");
+          ast_add_child(dw, ast_node1("Body", body));
+          ast_add_child(dw, ast_node1("Cond", $8->node));
+          ast_append_stmt(dw);
       }
-    | FOR LPAREN decl_stmt SEMI M bexpr SEMI M rel_bool N RPAREN M statement
-      { /* for loop stub â€” left as-is from original, pending real implementation */ }
+    | FOR LPAREN push_capture decl_stmt SEMI M bexpr SEMI M rel_bool N RPAREN M push_capture statement
+      {
+          /* for loop stub — control flow not fully wired, but we still
+             build an AST node so the tree reflects the source. */
+          ASTNode *cap_body = ast_pop_block();
+          ASTNode *cap_init = ast_pop_block();
+          ASTNode *init = (cap_init->nchildren == 1) ? cap_init->children[0] : cap_init;
+          ASTNode *body = (cap_body->nchildren == 1) ? cap_body->children[0] : cap_body;
+          ASTNode *fr = ast_node("For");
+          ast_add_child(fr, ast_node1("Init", init));
+          ast_add_child(fr, ast_node1("Cond", $7->node));
+          ast_add_child(fr, ast_node1("Update", $10->node));
+          ast_add_child(fr, ast_node1("Body", body));
+          ast_append_stmt(fr);
+      }
     ;
 
 non_if_stmt
@@ -209,19 +373,33 @@ non_if_stmt
           /* defer the jump; the enclosing loop/switch backpatches it on exit */
           int g = emit_goto(-1);
           breaklist_add(g);
+          ast_append_stmt(ast_node("Break"));
       }
     | CONTINUE SEMI
       {
           /* same deal, but target is the loop header (not the end) */
           int g = emit_goto(-1);
           continuelist_add(g);
+          ast_append_stmt(ast_node("Continue"));
       }
     | ID LPAREN arg_list RPAREN SEMI
-      { free($1); }
+      {
+          /* bare call as a statement. the arg_list rule (below) doesn't
+             carry AST nodes up because bison %union has no slot for a
+             list-of-AST, so we approximate with a FuncCall node tagged
+             by name; arg details aren't shown. */
+          ASTNode *c = ast_node("CallStmt");
+          ast_add_child(c, ast_leaf("callee:%s", $1));
+          ast_append_stmt(c);
+          free($1);
+      }
     | PRINTF LPAREN STRING RPAREN SEMI
       {
           emit_text("param %s", $3);
           emit_text("call printf, 1");
+          ASTNode *p = ast_node("Printf");
+          ast_add_child(p, ast_leaf("format:%s", $3));
+          ast_append_stmt(p);
           free($3);
       }
     | PRINTF LPAREN STRING COMMA aexpr RPAREN SEMI
@@ -229,6 +407,10 @@ non_if_stmt
           emit_text("param %s", $5->place);
           emit_text("param %s", $3);
           emit_text("call printf, 2");
+          ASTNode *p = ast_node("Printf");
+          ast_add_child(p, ast_leaf("format:%s", $3));
+          ast_add_child(p, ast_node1("Arg", $5->node));
+          ast_append_stmt(p);
           free_aattr($5);
           free($3);
       }
@@ -243,11 +425,20 @@ non_if_stmt
           emit_text("param &%s", $6);
           emit_text("param %s", $3);
           emit_text("call scanf, 2");
+          ASTNode *s = ast_node("Scanf");
+          ast_add_child(s, ast_leaf("format:%s", $3));
+          ast_add_child(s, ast_leaf("target:&%s", $6));
+          ast_append_stmt(s);
           free($6); free($3);
       }
     | switch_stmt
     | compound_stmt
     | SEMI
+      {
+          /* empty statement — represented explicitly so it shows up
+             in the tree and isn't silently swallowed. */
+          ast_append_stmt(ast_node("EmptyStmt"));
+      }
     | decl_stmt error
       {
           log_syntax_error(@2.first_line, @2.first_column,
@@ -302,7 +493,6 @@ switch_stmt
              inside the switch body. */
           char *tsw = new_temp();
           emit_text("%s = %s", tsw, $3->place);
-          free_aattr($3);
           /* stash the temp name and a placeholder end label that
              we'll fill in after the body. we pass the temp via $$
              of the mid-rule action. bison supports this via %union
@@ -315,6 +505,14 @@ switch_stmt
           __sw_has_default = 0;
           free(tsw);
           breaklist_push();
+
+          /* start a Switch AST node. push it on the switch-stack so
+             case_entries can find it; its first child is the
+             discriminant expression. */
+          ASTNode *sw = ast_node("Switch");
+          ast_add_child(sw, ast_node1("Discriminant", $3->node));
+          ast_push_switch(sw);
+          free_aattr($3);
       }
       LBRACE case_list RBRACE
       {
@@ -323,6 +521,9 @@ switch_stmt
              the dispatch "goto L_end" falls through to here. */
           int end_lbl = nextinstr();
           breaklist_pop(end_lbl);
+
+          ASTNode *sw = ast_pop_switch();
+          ast_append_stmt(sw);
       }
     ;
 
@@ -352,28 +553,19 @@ case_entry
           char *cond = mkstr("%s == %s", __sw_temp, $2);
           int ifi = emit_if(cond);
           free(cond);
-          /* the 'skip body' goto: if this case doesn't match, we
-             want to skip OVER the body to the next dispatch test.
-             but in C fall-through, a matched case runs the body
-             and everything after. so we only need the conditional
-             entry; no 'skip' goto here.
-
-             mechanism: the if-taken target is the next instruction
-             (body start). the if-not-taken falls through to the
-             NEXT case's dispatch test. for that to work, we need
-             the body to not run when falling through — we achieve
-             this by emitting a goto past the body right after the
-             if, which the body itself then lands after. */
           int skip_body = emit_goto(-1);
-          /* patch the if to jump to the body start */
           patch_one(ifi, nextinstr());
-          /* body starts here — record the skip_body index so we
-             can patch it to the NEXT case's dispatch */
-          free($2);
           /* stash skip_body in a small stack so case_list can chain */
           extern int __sw_skip_stack[128];
           extern int __sw_skip_sp;
           if (__sw_skip_sp < 128) __sw_skip_stack[__sw_skip_sp++] = skip_body;
+
+          /* start collecting this case's body into a fresh Block.
+             remember the case label so the closing action can build
+             a Case node with (value, body). */
+          ast_push_case_label(ast_leaf("case:%s", $2));
+          ast_push_block(ast_node("Block"));
+          free($2);
       }
       stmt_list
       {
@@ -385,16 +577,23 @@ case_entry
               int skip = __sw_skip_stack[--__sw_skip_sp];
               patch_one(skip, nextinstr());
           }
+
+          ASTNode *body = ast_pop_block();
+          /* unwrap: if the case body is just { ... } it'll be a Block
+             containing a single Block — flatten to one. */
+          if (body->nchildren == 1 &&
+              strcmp(body->children[0]->label, "Block") == 0)
+              body = body->children[0];
+          ASTNode *lbl  = ast_pop_case_label();
+          ASTNode *c    = ast_node("Case");
+          ast_add_child(c, lbl);
+          ast_add_child(c, body);
+          /* attach to the enclosing Switch (top of switch stack) */
+          ASTNode *sw = ast_top_switch();
+          if (sw) ast_add_child(sw, c);
       }
     | DEFAULT COLON
       {
-          /* default: no dispatch test, just a skip-body around the
-             body for fall-through consistency. but default is
-             reachable ONLY via fall-through from a prior unmatched
-             case, OR from an explicit dispatch-miss jump. we handle
-             the dispatch-miss by emitting a goto-to-default at the
-             tail of all dispatches, which is done via patching at
-             switch close time. */
           extern int __sw_has_default;
           extern int __sw_default_entry;
           __sw_has_default = 1;
@@ -403,6 +602,9 @@ case_entry
           extern int __sw_skip_stack[128];
           extern int __sw_skip_sp;
           if (__sw_skip_sp < 128) __sw_skip_stack[__sw_skip_sp++] = skip_body;
+
+          ast_push_case_label(ast_node("default"));
+          ast_push_block(ast_node("Block"));
       }
       stmt_list
       {
@@ -412,6 +614,17 @@ case_entry
               int skip = __sw_skip_stack[--__sw_skip_sp];
               patch_one(skip, nextinstr());
           }
+
+          ASTNode *body = ast_pop_block();
+          if (body->nchildren == 1 &&
+              strcmp(body->children[0]->label, "Block") == 0)
+              body = body->children[0];
+          ASTNode *lbl  = ast_pop_case_label();
+          ASTNode *c    = ast_node("Default");
+          ast_add_child(c, lbl);
+          ast_add_child(c, body);
+          ASTNode *sw = ast_top_switch();
+          if (sw) ast_add_child(sw, c);
       }
     ;
 
@@ -443,6 +656,10 @@ decl_item
                   emit_diagnostic("<stdin>", prev->decl_line, prev->decl_col,
                       "note", "previous definition of '%s' was here", $1);
           }
+          ASTNode *d = ast_node("VarDecl");
+          ast_add_child(d, ast_leaf("type:int"));
+          ast_add_child(d, ast_leaf("name:%s", $1));
+          ast_append_stmt(d);
           free($1);
       }
     | ID ASSIGN aexpr
@@ -458,6 +675,11 @@ decl_item
               sym_mark_init($1);
           }
           emit_text("%s = %s", $1, $3->place);
+          ASTNode *d = ast_node("VarDeclInit");
+          ast_add_child(d, ast_leaf("type:int"));
+          ast_add_child(d, ast_leaf("name:%s", $1));
+          ast_add_child(d, ast_node1("Init", $3->node));
+          ast_append_stmt(d);
           free($1); free_aattr($3);
       }
     | ID ASSIGN STRING
@@ -483,6 +705,11 @@ decl_item
               sym_mark_init($1);
           }
           emit_bool_assignment($1, $4);
+          ASTNode *d = ast_node("VarDeclInit");
+          ast_add_child(d, ast_leaf("type:int"));
+          ast_add_child(d, ast_leaf("name:%s", $1));
+          ast_add_child(d, ast_node1("Init", $4->node ? $4->node : ast_node("BoolExpr")));
+          ast_append_stmt(d);
           free($1);
       }
     | ID ASSIGN NOT LPAREN bexpr RPAREN
@@ -501,6 +728,12 @@ decl_item
           $5->truelist = $5->falselist;
           $5->falselist = tmp;
           emit_bool_assignment($1, $5);
+          ASTNode *d = ast_node("VarDeclInit");
+          ast_add_child(d, ast_leaf("type:int"));
+          ast_add_child(d, ast_leaf("name:%s", $1));
+          ast_add_child(d, ast_node1("Init",
+              ast_node1("Not", $5->node ? $5->node : ast_node("BoolExpr"))));
+          ast_append_stmt(d);
           free($1);
       }
     ;
@@ -520,6 +753,10 @@ assign_stmt
                       $1);
           }
           emit_text("%s = %s", $1, $3->place);
+          ASTNode *a = ast_node("Assign");
+          ast_add_child(a, ast_leaf("id:%s", $1));
+          ast_add_child(a, $3->node);
+          ast_append_stmt(a);
           free($1); free_aattr($3);
       }
     | ID ASSIGN STRING
@@ -541,6 +778,10 @@ assign_stmt
               sym_mark_init($1);
           }
           emit_bool_assignment($1, $4);
+          ASTNode *a = ast_node("Assign");
+          ast_add_child(a, ast_leaf("id:%s", $1));
+          ast_add_child(a, $4->node ? $4->node : ast_node("BoolExpr"));
+          ast_append_stmt(a);
           free($1);
       }
     | ID ASSIGN NOT LPAREN bexpr RPAREN
@@ -555,6 +796,10 @@ assign_stmt
           $5->truelist = $5->falselist;
           $5->falselist = tmp;
           emit_bool_assignment($1, $5);
+          ASTNode *a = ast_node("Assign");
+          ast_add_child(a, ast_leaf("id:%s", $1));
+          ast_add_child(a, ast_node1("Not", $5->node ? $5->node : ast_node("BoolExpr")));
+          ast_append_stmt(a);
           free($1);
       }
     | ID ADD_ASSIGN aexpr
@@ -567,6 +812,11 @@ assign_stmt
               sym_mark_init($1);
           }
           emit_compound_assign($1, "+", $3);
+          ASTNode *a = ast_node("CompoundAssign");
+          ast_add_child(a, ast_leaf("op:+="));
+          ast_add_child(a, ast_leaf("id:%s", $1));
+          ast_add_child(a, $3->node);
+          ast_append_stmt(a);
           free($1); free_aattr($3);
       }
     | ID SUB_ASSIGN aexpr
@@ -579,6 +829,11 @@ assign_stmt
               sym_mark_init($1);
           }
           emit_compound_assign($1, "-", $3);
+          ASTNode *a = ast_node("CompoundAssign");
+          ast_add_child(a, ast_leaf("op:-="));
+          ast_add_child(a, ast_leaf("id:%s", $1));
+          ast_add_child(a, $3->node);
+          ast_append_stmt(a);
           free($1); free_aattr($3);
       }
     | ID MUL_ASSIGN aexpr
@@ -591,6 +846,11 @@ assign_stmt
               sym_mark_init($1);
           }
           emit_compound_assign($1, "*", $3);
+          ASTNode *a = ast_node("CompoundAssign");
+          ast_add_child(a, ast_leaf("op:*="));
+          ast_add_child(a, ast_leaf("id:%s", $1));
+          ast_add_child(a, $3->node);
+          ast_append_stmt(a);
           free($1); free_aattr($3);
       }
     | ID DIV_ASSIGN aexpr
@@ -603,6 +863,11 @@ assign_stmt
               sym_mark_init($1);
           }
           emit_compound_assign($1, "/", $3);
+          ASTNode *a = ast_node("CompoundAssign");
+          ast_add_child(a, ast_leaf("op:/="));
+          ast_add_child(a, ast_leaf("id:%s", $1));
+          ast_add_child(a, $3->node);
+          ast_append_stmt(a);
           free($1); free_aattr($3);
       }
     | ID MOD_ASSIGN aexpr
@@ -615,6 +880,11 @@ assign_stmt
               sym_mark_init($1);
           }
           emit_compound_assign($1, "%", $3);
+          ASTNode *a = ast_node("CompoundAssign");
+          ast_add_child(a, ast_leaf("op:%%="));
+          ast_add_child(a, ast_leaf("id:%s", $1));
+          ast_add_child(a, $3->node);
+          ast_append_stmt(a);
           free($1); free_aattr($3);
       }
     ;
@@ -629,7 +899,11 @@ inc_stmt
               sym_mark_used($1, @1.first_line, @1.first_column);
               sym_mark_init($1);
           }
-          emit_incdec($1, 1); free($1);
+          emit_incdec($1, 1);
+          ASTNode *n = ast_node("PostInc");
+          ast_add_child(n, ast_leaf("id:%s", $1));
+          ast_append_stmt(n);
+          free($1);
       }
     | ID DEC
       {
@@ -640,7 +914,11 @@ inc_stmt
               sym_mark_used($1, @1.first_line, @1.first_column);
               sym_mark_init($1);
           }
-          emit_incdec($1, 0); free($1);
+          emit_incdec($1, 0);
+          ASTNode *n = ast_node("PostDec");
+          ast_add_child(n, ast_leaf("id:%s", $1));
+          ast_append_stmt(n);
+          free($1);
       }
     | INC ID
       {
@@ -651,7 +929,11 @@ inc_stmt
               sym_mark_used($2, @2.first_line, @2.first_column);
               sym_mark_init($2);
           }
-          emit_incdec($2, 1); free($2);
+          emit_incdec($2, 1);
+          ASTNode *n = ast_node("PreInc");
+          ast_add_child(n, ast_leaf("id:%s", $2));
+          ast_append_stmt(n);
+          free($2);
       }
     | DEC ID
       {
@@ -662,17 +944,59 @@ inc_stmt
               sym_mark_used($2, @2.first_line, @2.first_column);
               sym_mark_init($2);
           }
-          emit_incdec($2, 0); free($2);
+          emit_incdec($2, 0);
+          ASTNode *n = ast_node("PreDec");
+          ast_add_child(n, ast_leaf("id:%s", $2));
+          ast_append_stmt(n);
+          free($2);
       }
     ;
 
 return_stmt
-    : RETURN             { emit_text("return"); }
-    | RETURN aexpr       { emit_text("return %s", $2->place); free_aattr($2); }
+    : RETURN
+      {
+          emit_text("return");
+          ast_append_stmt(ast_node("Return"));
+      }
+    | RETURN aexpr
+      {
+          emit_text("return %s", $2->place);
+          ASTNode *r = ast_node("Return");
+          ast_add_child(r, $2->node);
+          ast_append_stmt(r);
+          free_aattr($2);
+      }
     ;
 
 M : /* empty */ { $$ = nextinstr(); } ;
 N : /* empty */ { $$ = makelist(emit_goto(-1)); } ;
+
+/* push_block: shared empty non-terminal that pushes a proper Block
+   node (as opposed to push_capture which pushes a throwaway). used
+   by compound_stmt's two alternatives (success + error-recovery). */
+push_block
+    : /* empty */ { ast_push_block(ast_node("Block")); }
+    ;
+
+/* push_capture: shared empty non-terminal that pushes a throwaway
+   Block onto the stmt stack. multiple control-flow rules use this
+   so bison doesn't treat each anonymous mid-rule action as a
+   distinct empty production (which causes reduce/reduce conflicts). */
+push_capture
+    : /* empty */ { ast_push_block(ast_node("_capture")); }
+    ;
+
+/* loop_enter: shared prefix for WHILE/DO. pushes break/continue
+   frames AND an AST capture block. used to be an inline mid-rule
+   action, but hoisting it here keeps bison happy (see push_capture). */
+loop_enter
+    : /* empty */
+      {
+          breaklist_push();
+          continuelist_push();
+          ast_push_block(ast_node("_capture"));
+      }
+    ;
 
 bexpr     : bor_expr { $$ = $1; } ;
 
@@ -680,7 +1004,8 @@ bor_expr
     : bor_expr OR M band_expr
       {
           backpatch($1->falselist, $3);
-          $$ = make_battr(merge_list($1->truelist, $4->truelist), $4->falselist);
+          $$ = make_battr(merge_list($1->truelist, $4->truelist), $4->falselist,
+                          ast_node2("||", $1->node, $4->node));
       }
     | band_expr { $$ = $1; }
     ;
@@ -689,13 +1014,15 @@ band_expr
     : band_expr AND M bnot_expr
       {
           backpatch($1->truelist, $3);
-          $$ = make_battr($4->truelist, merge_list($1->falselist, $4->falselist));
+          $$ = make_battr($4->truelist, merge_list($1->falselist, $4->falselist),
+                          ast_node2("&&", $1->node, $4->node));
       }
     | bnot_expr { $$ = $1; }
     ;
 
 bnot_expr
-    : NOT bnot_expr { $$ = make_battr($2->falselist, $2->truelist); }
+    : NOT bnot_expr { $$ = make_battr($2->falselist, $2->truelist,
+                                      ast_node1("!", $2->node)); }
     | bprimary      { $$ = $1; }
     ;
 
@@ -726,41 +1053,72 @@ bprimary
           }
           emit_text("%s = %s", $1, $3->place);
           $$ = emit_truthy($1);
+          /* an `=` used as a truth value: build an Assign-as-expression */
+          $$->node = ast_node2("Assign", ast_leaf("id:%s", $1), $3->node);
           free($1); free_aattr($3);
       }
     | aexpr
       {
           /* arithmetic-as-truthy: treat nonzero as true */
           $$ = emit_truthy($1->place);
+          $$->node = ast_node1("Truthy", $1->node);
           free_aattr($1);
       }
     ;
 
 rel_bool
-    : aexpr LT aexpr  { $$ = emit_relop($1->place, "<",  $3->place); free_aattr($1); free_aattr($3); }
-    | aexpr GT aexpr  { $$ = emit_relop($1->place, ">",  $3->place); free_aattr($1); free_aattr($3); }
-    | aexpr LE aexpr  { $$ = emit_relop($1->place, "<=", $3->place); free_aattr($1); free_aattr($3); }
-    | aexpr GE aexpr  { $$ = emit_relop($1->place, ">=", $3->place); free_aattr($1); free_aattr($3); }
-    | aexpr EQ aexpr  { $$ = emit_relop($1->place, "==", $3->place); free_aattr($1); free_aattr($3); }
-    | aexpr NE aexpr  { $$ = emit_relop($1->place, "!=", $3->place); free_aattr($1); free_aattr($3); }
+    : aexpr LT aexpr
+      { $$ = emit_relop($1->place, "<",  $3->place);
+        $$->node = ast_node2("<",  $1->node, $3->node);
+        free_aattr($1); free_aattr($3); }
+    | aexpr GT aexpr
+      { $$ = emit_relop($1->place, ">",  $3->place);
+        $$->node = ast_node2(">",  $1->node, $3->node);
+        free_aattr($1); free_aattr($3); }
+    | aexpr LE aexpr
+      { $$ = emit_relop($1->place, "<=", $3->place);
+        $$->node = ast_node2("<=", $1->node, $3->node);
+        free_aattr($1); free_aattr($3); }
+    | aexpr GE aexpr
+      { $$ = emit_relop($1->place, ">=", $3->place);
+        $$->node = ast_node2(">=", $1->node, $3->node);
+        free_aattr($1); free_aattr($3); }
+    | aexpr EQ aexpr
+      { $$ = emit_relop($1->place, "==", $3->place);
+        $$->node = ast_node2("==", $1->node, $3->node);
+        free_aattr($1); free_aattr($3); }
+    | aexpr NE aexpr
+      { $$ = emit_relop($1->place, "!=", $3->place);
+        $$->node = ast_node2("!=", $1->node, $3->node);
+        free_aattr($1); free_aattr($3); }
     ;
 
 aexpr
     : aexpr PLUS term
-      { char *t = new_temp(); emit_text("%s = %s + %s", t, $1->place, $3->place); $$ = make_aattr(t); free_aattr($1); free_aattr($3); }
+      { char *t = new_temp(); emit_text("%s = %s + %s", t, $1->place, $3->place);
+        $$ = make_aattr(t, ast_node2("+", $1->node, $3->node));
+        free_aattr($1); free_aattr($3); }
     | aexpr MINUS term
-      { char *t = new_temp(); emit_text("%s = %s - %s", t, $1->place, $3->place); $$ = make_aattr(t); free_aattr($1); free_aattr($3); }
+      { char *t = new_temp(); emit_text("%s = %s - %s", t, $1->place, $3->place);
+        $$ = make_aattr(t, ast_node2("-", $1->node, $3->node));
+        free_aattr($1); free_aattr($3); }
     | term
       { $$ = $1; }
     ;
 
 term
     : term MUL factor
-      { char *t = new_temp(); emit_text("%s = %s * %s", t, $1->place, $3->place); $$ = make_aattr(t); free_aattr($1); free_aattr($3); }
+      { char *t = new_temp(); emit_text("%s = %s * %s", t, $1->place, $3->place);
+        $$ = make_aattr(t, ast_node2("*", $1->node, $3->node));
+        free_aattr($1); free_aattr($3); }
     | term DIV factor
-      { char *t = new_temp(); emit_text("%s = %s / %s", t, $1->place, $3->place); $$ = make_aattr(t); free_aattr($1); free_aattr($3); }
+      { char *t = new_temp(); emit_text("%s = %s / %s", t, $1->place, $3->place);
+        $$ = make_aattr(t, ast_node2("/", $1->node, $3->node));
+        free_aattr($1); free_aattr($3); }
     | term MOD factor
-      { char *t = new_temp(); emit_text("%s = %s %% %s", t, $1->place, $3->place); $$ = make_aattr(t); free_aattr($1); free_aattr($3); }
+      { char *t = new_temp(); emit_text("%s = %s %% %s", t, $1->place, $3->place);
+        $$ = make_aattr(t, ast_node2("%", $1->node, $3->node));
+        free_aattr($1); free_aattr($3); }
     | factor
       { $$ = $1; }
     ;
@@ -777,7 +1135,10 @@ factor
               sym_mark_init($2);
           }
           /* pre-increment: bump first, then use the new value */
-          emit_incdec($2, 1); $$ = make_aattr($2);
+          emit_incdec($2, 1);
+          $$ = make_aattr(xstrdup($2),
+                 ast_node1("PreInc", ast_leaf("id:%s", $2)));
+          free($2);
       }
     | DEC ID
       {
@@ -789,7 +1150,10 @@ factor
               sym_mark_init($2);
           }
           /* pre-decrement: bump first, then use the new value */
-          emit_incdec($2, 0); $$ = make_aattr($2);
+          emit_incdec($2, 0);
+          $$ = make_aattr(xstrdup($2),
+                 ast_node1("PreDec", ast_leaf("id:%s", $2)));
+          free($2);
       }
     | ID INC
       {
@@ -804,7 +1168,8 @@ factor
           char *old = new_temp();
           emit_text("%s = %s", old, $1);
           emit_incdec($1, 1);
-          $$ = make_aattr(old);
+          $$ = make_aattr(old,
+                 ast_node1("PostInc", ast_leaf("id:%s", $1)));
           free($1);
       }
     | ID DEC
@@ -820,14 +1185,15 @@ factor
           char *old = new_temp();
           emit_text("%s = %s", old, $1);
           emit_incdec($1, 0);
-          $$ = make_aattr(old);
+          $$ = make_aattr(old,
+                 ast_node1("PostDec", ast_leaf("id:%s", $1)));
           free($1);
       }
     | MINUS factor %prec UMINUS
       {
           char *t = new_temp();
           emit_text("%s = 0 - %s", t, $2->place);
-          $$ = make_aattr(t);
+          $$ = make_aattr(t, ast_node1("Neg", $2->node));
           free_aattr($2);
       }
     | PLUS factor %prec UMINUS
@@ -843,10 +1209,10 @@ factor
           } else {
               sym_mark_used($1, @1.first_line, @1.first_column);
           }
-          $$ = make_aattr($1);
+          $$ = make_aattr($1, ast_leaf("id:%s", $1));
       }
     | NUMBER
-      { $$ = make_aattr($1); }
+      { $$ = make_aattr($1, ast_leaf("num:%s", $1)); }
     ;
 
 %%

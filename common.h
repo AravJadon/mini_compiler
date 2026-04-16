@@ -15,10 +15,18 @@ typedef struct {
     int target;
 } Instruction;
 
+
 /* backpatching helpers */
 typedef struct IntList { int index; struct IntList *next; } IntList;
-typedef struct AAttr  { char *place; } AAttr;
-typedef struct BAttr  { IntList *truelist; IntList *falselist; } BAttr;
+
+/* forward-declare ASTNode so the attribute structs can carry one.
+   each expression/stmt that flows through the grammar now brings
+   along the AST fragment it represents, so the parser can glue
+   them together without a second pass. */
+struct ASTNode;
+
+typedef struct AAttr  { char *place; struct ASTNode *node; } AAttr;
+typedef struct BAttr  { IntList *truelist; IntList *falselist; struct ASTNode *node; } BAttr;
 
 /* symbol table */
 #define SYM_SIZE 1024
@@ -64,8 +72,8 @@ extern int temp_count;
 /* tac functions */
 char    *xstrdup(const char *s);
 char    *mkstr(const char *fmt, ...);
-AAttr   *make_aattr(char *place);
-BAttr   *make_battr(IntList *t, IntList *f);
+AAttr   *make_aattr(char *place, struct ASTNode *node);
+BAttr   *make_battr(IntList *t, IntList *f, struct ASTNode *node);
 void     free_aattr(AAttr *a);
 int      nextinstr(void);
 int      line_of(int idx);
@@ -97,6 +105,7 @@ void breaklist_add(int goto_idx);     /* register an emit_goto(-1) to be patched
 void continuelist_push(void);
 void continuelist_pop(int loop_head_target);
 void continuelist_add(int goto_idx);
+
 
 /* error state */
 extern int had_errors;
@@ -172,8 +181,36 @@ typedef struct {
     int  reg;       /* -1 means spilled to memory */
 } RegAssign;
 
+
+
 extern RegAssign reg_assigns[MAX_VARS];
 extern int reg_assign_count;
+
+/* ---- abstract syntax tree ----
+   the parser builds one of these alongside the TAC while it runs, and
+   main.c walks it in phase 2 to show the user what was actually parsed.
+   labels are short human-readable strings (operator, keyword, or leaf
+   text like an identifier or numeric literal). */
+#define AST_MAX_CHILDREN 32
+#define AST_LABEL_LEN    96
+
+typedef struct ASTNode {
+    char label[AST_LABEL_LEN];
+    struct ASTNode *children[AST_MAX_CHILDREN];
+    int nchildren;
+} ASTNode;
+
+extern ASTNode *ast_root;
+
+ASTNode *ast_node (const char *label);
+ASTNode *ast_leaf (const char *fmt, ...);   /* printf-style leaf (for "id:x", "num:42") */
+ASTNode *ast_node1(const char *label, ASTNode *c1);
+ASTNode *ast_node2(const char *label, ASTNode *c1, ASTNode *c2);
+ASTNode *ast_node3(const char *label, ASTNode *c1, ASTNode *c2, ASTNode *c3);
+ASTNode *ast_node4(const char *label, ASTNode *c1, ASTNode *c2, ASTNode *c3, ASTNode *c4);
+void     ast_add_child(ASTNode *parent, ASTNode *child);
+void     ast_print(ASTNode *node, int depth);   /* depth kept for API compat */
+void     ast_free (ASTNode *node);
 
 /* lexer/parser glue */
 int  yylex(void);

@@ -21,22 +21,26 @@ char *mkstr(const char *fmt, ...) {
     return xstrdup(buf);
 }
 
-AAttr *make_aattr(char *place) {
+AAttr *make_aattr(char *place, struct ASTNode *node) {
     AAttr *a = (AAttr *)malloc(sizeof(AAttr));
     a->place = place;
+    a->node  = node;
     return a;
 }
 
-BAttr *make_battr(IntList *t, IntList *f) {
+BAttr *make_battr(IntList *t, IntList *f, struct ASTNode *node) {
     BAttr *b = (BAttr *)malloc(sizeof(BAttr));
     b->truelist = t;
     b->falselist = f;
+    b->node = node;
     return b;
 }
 
 void free_aattr(AAttr *a) {
     if (!a) return;
     free(a->place);
+    /* note: we do NOT free a->node — it's owned by the AST that
+       lives until main.c tears it down after phase 2. */
     free(a);
 }
 
@@ -121,7 +125,7 @@ BAttr *emit_truthy(const char *expr) {
     int i = emit_if(cond);
     int j = emit_goto(-1);
     free(cond);
-    return make_battr(makelist(i), makelist(j));
+    return make_battr(makelist(i), makelist(j), NULL);
 }
 
 BAttr *emit_relop(const char *lhs, const char *op, const char *rhs) {
@@ -129,7 +133,7 @@ BAttr *emit_relop(const char *lhs, const char *op, const char *rhs) {
     int i = emit_if(cond);
     int j = emit_goto(-1);
     free(cond);
-    return make_battr(makelist(i), makelist(j));
+    return make_battr(makelist(i), makelist(j), NULL);
 }
 
 void emit_compound_assign(const char *id, const char *op, AAttr *rhs) {

@@ -1,0 +1,251 @@
+
+************************************************************
+*       MINI COMPILER FOR TOY-C LANGUAGE                   *
+*       Target: Simple RISC ISA                            *
+************************************************************
+
+============================================================
+       PHASE 1: LEXICAL ANALYSIS (Tokenization)
+============================================================
+
+  Line     Token Type           Lexeme
+  ----     ----------           ------
+  2        TYPE                 int
+  2        ID                   main
+  2        LPAREN               (
+  2        RPAREN               )
+  2        LBRACE               {
+  3        TYPE                 int
+  3        ID                   a
+  3        SEMI                 ;
+  4        TYPE                 int
+  4        ID                   b
+  4        SEMI                 ;
+  5        TYPE                 int
+  5        ID                   c
+  5        SEMI                 ;
+  6        TYPE                 int
+  6        ID                   d
+  6        SEMI                 ;
+  7        TYPE                 int
+  7        ID                   result
+  7        SEMI                 ;
+  10       ID                   a
+  10       ASSIGN               =
+  10       NUMBER               3
+  10       PLUS                 +
+  10       NUMBER               5
+  10       SEMI                 ;
+  13       ID                   b
+  13       ASSIGN               =
+  13       NUMBER               10
+  13       SEMI                 ;
+  14       ID                   c
+  14       ASSIGN               =
+  14       ID                   b
+  14       PLUS                 +
+  14       NUMBER               2
+  14       SEMI                 ;
+  17       ID                   d
+  17       ASSIGN               =
+  17       ID                   a
+  17       PLUS                 +
+  17       ID                   b
+  17       SEMI                 ;
+  18       ID                   result
+  18       ASSIGN               =
+  18       ID                   a
+  18       PLUS                 +
+  18       ID                   b
+  18       SEMI                 ;
+  21       IF                   if
+  21       LPAREN               (
+  21       ID                   d
+  21       GT                   >
+  21       NUMBER               0
+  21       RPAREN               )
+  21       LBRACE               {
+  22       ID                   result
+  22       ASSIGN               =
+  22       ID                   d
+  22       PLUS                 +
+  22       ID                   c
+  22       SEMI                 ;
+  23       RBRACE               }
+  23       ELSE                 else
+  23       LBRACE               {
+  24       ID                   result
+  24       ASSIGN               =
+  24       ID                   c
+  24       SEMI                 ;
+  25       RBRACE               }
+  26       RBRACE               }
+
+  Total tokens: 70
+  [OK] No lexical errors.
+
+============================================================
+       PHASE 2: SYNTAX ANALYSIS (Parsing)
+============================================================
+
+  [OK] Syntax analysis completed successfully.
+  The input program is syntactically valid.
+
+============================================================
+       PHASE 3: SEMANTIC ANALYSIS
+============================================================
+
+  Symbol Table (Declared Variables):
+  ------------------------------
+  result                        
+  d                             
+  a                             
+  c                             
+  b                             
+  ------------------------------
+  Total declared: 5 variables
+
+  [OK] Semantic analysis completed successfully.
+  All variables declared before use. No duplicate declarations.
+
+============================================================
+       PHASE 4: INTERMEDIATE CODE (Three Address Code)
+============================================================
+
+  100: t1 = 3 + 5
+  101: a = t1
+  102: b = 10
+  103: t2 = b + 2
+  104: c = t2
+  105: t3 = a + b
+  106: d = t3
+  107: t4 = a + b
+  108: result = t4
+  109: if d > 0 goto 111
+  110: goto 114
+  111: t5 = d + c
+  112: result = t5
+  113: goto 115
+  114: result = c
+
+  Total TAC instructions: 15
+
+============================================================
+       PHASE 5: OPTIMIZATION
+============================================================
+
+  Optimizations applied:
+    - Constant Folding:         4
+    - Constant Propagation:     6
+    - Common Sub-Expression:    0
+    - Dead Code Elimination:    1
+    - Instructions removed:     1
+
+  Optimized TAC (14 instructions):
+
+  100: a = 8
+  101: b = 10
+  102: t2 = 12
+  103: c = t2
+  104: t3 = 18
+  105: d = t3
+  106: t4 = 18
+  107: result = t4
+  108: if d > 0 goto 110
+  109: goto 113
+  110: t5 = d + c
+  111: result = t5
+  112: goto 115
+  113: result = c
+
+============================================================
+       PHASE 6: TARGET CODE GENERATION (Assembly)
+============================================================
+
+  Target:  Simple RISC ISA (8 registers R0-R7)
+  Total assembly instructions: 82
+
+  ; ============================================================
+  ;  Target Code: Simple RISC Assembly
+  ;  Registers: R0-R7 (R1, R2 used for computation)
+  ; ============================================================
+  
+  .DATA
+      result               .WORD 0
+      d                    .WORD 0
+      a                    .WORD 0
+      c                    .WORD 0
+      b                    .WORD 0
+      t1                   .WORD 0
+      t2                   .WORD 0
+      t3                   .WORD 0
+      t4                   .WORD 0
+      t5                   .WORD 0
+  
+  .CODE
+      JMP L100              ; jump to program start
+  
+      ; a = 8
+      LOADI R1, 8
+      STORE R1, a
+  
+      ; b = 10
+      LOADI R1, 10
+      STORE R1, b
+  
+      ; t2 = 12
+      LOADI R1, 12
+      STORE R1, t2
+  
+      ; c = t2
+      LOAD  R1, t2
+      STORE R1, c
+  
+      ; t3 = 18
+      LOADI R1, 18
+      STORE R1, t3
+  
+      ; d = t3
+      LOAD  R1, t3
+      STORE R1, d
+  
+      ; t4 = 18
+      LOADI R1, 18
+      STORE R1, t4
+  
+      ; result = t4
+      LOAD  R1, t4
+      STORE R1, result
+  
+      LOAD  R1, d
+      LOADI R2, 0
+      CMP   R1, R2
+      BGT   L110
+  
+      JMP   L113
+  
+  L110:
+      ; t5 = d + c
+      LOAD  R1, d
+      LOAD  R2, c
+      ADD   R1, R1, R2
+      STORE R1, t5
+  
+      ; result = t5
+      LOAD  R1, t5
+      STORE R1, result
+  
+      JMP   L115
+  
+  L113:
+      ; result = c
+      LOAD  R1, c
+      STORE R1, result
+  
+      HALT                ; end of program
+  
+  ; ============================================================
+  ;  End of generated assembly
+  ; ============================================================
+
+Compilation completed successfully.
