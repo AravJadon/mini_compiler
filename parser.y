@@ -454,7 +454,7 @@ decl_item
               "incompatible types when initializing type 'int' using type 'char *'");
           free($1); free($3);
       }
-    | ID ASSIGN LPAREN rel_bool RPAREN
+    | ID ASSIGN LPAREN bexpr RPAREN
       {
           if (sym_declare($1, @1.first_line, @1.first_column)) {
               log_sem_error(@1.first_line, @1.first_column,
@@ -469,7 +469,7 @@ decl_item
           emit_bool_assignment($1, $4);
           free($1);
       }
-    | ID ASSIGN NOT LPAREN rel_bool RPAREN
+    | ID ASSIGN NOT LPAREN bexpr RPAREN
       {
           if (sym_declare($1, @1.first_line, @1.first_column)) {
               log_sem_error(@1.first_line, @1.first_column,
@@ -516,7 +516,7 @@ assign_stmt
               "incompatible types when assigning to type 'int' from type 'char *'");
           free($1); free($3);
       }
-    | ID ASSIGN LPAREN rel_bool RPAREN
+    | ID ASSIGN LPAREN bexpr RPAREN
       {
           if (!sym_lookup($1)) {
               log_sem_error(@1.first_line, @1.first_column,
@@ -527,7 +527,7 @@ assign_stmt
           emit_bool_assignment($1, $4);
           free($1);
       }
-    | ID ASSIGN NOT LPAREN rel_bool RPAREN
+    | ID ASSIGN NOT LPAREN bexpr RPAREN
       {
           if (!sym_lookup($1)) {
               log_sem_error(@1.first_line, @1.first_column,
