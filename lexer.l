@@ -9,6 +9,7 @@
  *    - Scope tracking via sym_push_scope / sym_pop_scope on braces
  * ================================================================ */
 %{
+#include "common.h"
 #include "parser.tab.h"
 #include <string.h>
 #include <stdlib.h>

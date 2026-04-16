@@ -1,6 +1,6 @@
-%code requires {
+%{
 #include "common.h"
-}
+%}
 
 %define parse.error verbose
 %locations
@@ -107,8 +107,80 @@ stmt_list
     ;
 
 statement
-    : matched_stmt
-    | unmatched_stmt
+    : non_if_stmt
+    | IF LPAREN bexpr RPAREN M statement %prec LOWER_THAN_ELSE
+      {
+          backpatch($3->truelist, $5);
+          backpatch($3->falselist, nextinstr());
+      }
+    | IF LPAREN bexpr RPAREN M statement ELSE N M statement
+      {
+          backpatch($3->truelist, $5);
+          backpatch($3->falselist, $9);
+          backpatch($8, nextinstr());
+      }
+    | IF LPAREN error RPAREN M statement %prec LOWER_THAN_ELSE
+      {
+          log_syntax_error(@3.first_line, @3.first_column,
+              "expected expression in 'if' condition");
+          yyerrok;
+      }
+    | IF LPAREN error RPAREN M statement ELSE M statement
+      {
+          log_syntax_error(@3.first_line, @3.first_column,
+              "expected expression in 'if' condition");
+          yyerrok;
+      }
+    | IF error
+      {
+          log_syntax_error(@1.first_line, @1.first_column + 2,
+              "expected '(' after 'if'");
+          yyerrok;
+      }
+    | WHILE M LPAREN bexpr RPAREN
+      {
+          /* push break/continue frames right before the body.
+             continue targets the M at position $2, break targets
+             whatever comes after the body. */
+          breaklist_push();
+          continuelist_push();
+      }
+      M statement %prec LOWER_THAN_ELSE
+      {
+          backpatch($4->truelist, $7);
+          emit_goto($2);
+          int end_lbl = nextinstr();
+          backpatch($4->falselist, end_lbl);
+          breaklist_pop(end_lbl);
+          continuelist_pop($2);
+      }
+    | WHILE M LPAREN error RPAREN M statement
+      {
+          log_syntax_error(@4.first_line, @4.first_column,
+              "expected expression in 'while' condition");
+          yyerrok;
+      }
+    | WHILE error
+      {
+          log_syntax_error(@1.first_line, @1.first_column + 5,
+              "expected '(' after 'while'");
+          yyerrok;
+      }
+    | DO M
+      {
+          breaklist_push();
+          continuelist_push();
+      }
+      statement WHILE M LPAREN bexpr RPAREN SEMI
+      {
+          backpatch($8->truelist, $2);
+          int end_lbl = nextinstr();
+          backpatch($8->falselist, end_lbl);
+          breaklist_pop(end_lbl);
+          continuelist_pop($6);
+      }
+    | FOR LPAREN decl_stmt SEMI M bexpr SEMI M rel_bool N RPAREN M statement
+      { /* for loop stub â€” left as-is from original, pending real implementation */ }
     ;
 
 non_if_stmt
@@ -327,85 +399,6 @@ case_entry
       }
     ;
 
-matched_stmt
-    : non_if_stmt
-    | IF LPAREN bexpr RPAREN M matched_stmt N ELSE M matched_stmt
-      {
-          backpatch($3->truelist, $5);
-          backpatch($3->falselist, $9);
-          backpatch($7, nextinstr());
-      }
-    | IF LPAREN error RPAREN M matched_stmt N ELSE M matched_stmt
-      {
-          log_syntax_error(@3.first_line, @3.first_column,
-              "expected expression in 'if' condition");
-          yyerrok;
-      }
-    | IF error
-      {
-          log_syntax_error(@1.first_line, @1.first_column + 2,
-              "expected '(' after 'if'");
-          yyerrok;
-      }
-    | WHILE M LPAREN bexpr RPAREN
-      {
-          /* push break/continue frames right before the body.
-             continue targets the M at position $2, break targets
-             whatever comes after the body. */
-          breaklist_push();
-          continuelist_push();
-      }
-      M statement %prec LOWER_THAN_ELSE
-      {
-          backpatch($4->truelist, $7);
-          emit_goto($2);
-          int end_lbl = nextinstr();
-          backpatch($4->falselist, end_lbl);
-          breaklist_pop(end_lbl);
-          continuelist_pop($2);
-      }
-    | WHILE M LPAREN error RPAREN M matched_stmt
-      {
-          log_syntax_error(@4.first_line, @4.first_column,
-              "expected expression in 'while' condition");
-          yyerrok;
-      }
-    | WHILE error
-      {
-          log_syntax_error(@1.first_line, @1.first_column + 5,
-              "expected '(' after 'while'");
-          yyerrok;
-      }
-    | DO M
-      {
-          breaklist_push();
-          continuelist_push();
-      }
-      statement %prec LOWER_THAN_ELSE WHILE M LPAREN bexpr RPAREN SEMI
-      {
-          backpatch($8->truelist, $2);
-          int end_lbl = nextinstr();
-          backpatch($8->falselist, end_lbl);
-          breaklist_pop(end_lbl);
-          continuelist_pop($6);
-      }
-    | FOR LPAREN decl_stmt SEMI M bexpr SEMI M rel_bool N RPAREN M matched_stmt
-      { /* for loop stub — left as-is from original, pending real implementation */ }
-    ;
-
-unmatched_stmt
-    : IF LPAREN bexpr RPAREN M statement
-      {
-          backpatch($3->truelist, $5);
-          backpatch($3->falselist, nextinstr());
-      }
-    | IF LPAREN bexpr RPAREN M matched_stmt N ELSE M unmatched_stmt
-      {
-          backpatch($3->truelist, $5);
-          backpatch($3->falselist, $9);
-          backpatch($7, nextinstr());
-      }
-    ;
 
 decl_stmt
     : TYPE decl_items
