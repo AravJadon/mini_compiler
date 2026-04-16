@@ -341,6 +341,19 @@ static int get_reg(const char *name) {
     return var_color[idx];
 }
 
+static int reg_is_live_out(int instr_idx, int reg) {
+    int v;
+    for (v = 0; v < var_count; v++) {
+        if (var_color[v] == reg && live_out[instr_idx][v])
+            return 1;
+    }
+    return 0;
+}
+
+static int reg_is_avoided(int reg, int avoid1, int avoid2, int avoid3) {
+    return reg == avoid1 || reg == avoid2 || reg == avoid3;
+}
+
 /* ---- scratch register selection ----
    when we need to stage a value for a binary op, we can't just grab
    R1 and R2 unconditionally — they might be the home of a variable
@@ -350,24 +363,19 @@ static int get_reg(const char *name) {
    pick_scratch finds a register in [1..NUM_REGS) that is not the
    home of anything currently live-out of instruction `instr_idx`
    and not in `avoid` (used when we need two different scratches). */
-static int pick_scratch(int instr_idx, int avoid) {
+static int pick_scratch(int instr_idx, int avoid1, int avoid2, int avoid3) {
     int r;
     for (r = 1; r < NUM_REGS; r++) {
-        if (r == avoid) continue;
-        int conflict = 0;
-        int v;
-        for (v = 0; v < var_count; v++) {
-            if (var_color[v] == r && live_out[instr_idx][v]) {
-                conflict = 1;
-                break;
-            }
-        }
-        if (!conflict) return r;
+        if (reg_is_avoided(r, avoid1, avoid2, avoid3)) continue;
+        if (!reg_is_live_out(instr_idx, r)) return r;
     }
     /* everything is live — fall back to R1/R2 and accept that
        this is already a very crowded instruction. in practice
        the graph coloring would have spilled some of these. */
-    return (avoid == 1) ? 2 : 1;
+    for (r = 1; r < NUM_REGS; r++) {
+        if (!reg_is_avoided(r, avoid1, avoid2, avoid3)) return r;
+    }
+    return 1;
 }
 
 /* load a value into a scratch register, but if the var has an allocated
@@ -465,9 +473,9 @@ void generate_assembly(void) {
             if (sscanf(opt_buf[i].text, "%63s %7s %63s", s1, op, s2) == 3) {
                 /* for conditions the two scratches need to be different,
                    and neither can clobber a live register */
-                int sc1 = pick_scratch(i, -1);
-                int sc2 = pick_scratch(i, sc1);
+                int sc1 = pick_scratch(i, -1, -1, -1);
                 int r1 = load_operand(s1, sc1);
+                int sc2 = pick_scratch(i, sc1, r1, -1);
                 int r2 = load_operand(s2, sc2);
                 emit("    CMP   R%d, R%d", r1, r2);
                 emit("    %-5s L%d", branch_op(op), line_of(opt_buf[i].target));
@@ -483,7 +491,7 @@ void generate_assembly(void) {
             /* return with value: load into R0 then halt */
             if (strncmp(text, "return ", 7) == 0) {
                 const char *retval = text + 7;
-                int sc = pick_scratch(i, -1);
+                int sc = pick_scratch(i, -1, -1, -1);
                 int r = load_operand(retval, sc);
                 if (r != 0)
                     emit("    ADD   R0, R%d, R0    ; return value", r);
@@ -525,9 +533,9 @@ void generate_assembly(void) {
                 /* pick scratches that don't step on anything live.
                    for the two operand loads we use different scratches
                    so the second load doesn't overwrite the first. */
-                int sc1 = pick_scratch(i, -1);
-                int sc2 = pick_scratch(i, sc1);
+                int sc1 = pick_scratch(i, -1, -1, -1);
                 int r1 = load_operand(s1, sc1);
+                int sc2 = pick_scratch(i, sc1, r1, -1);
                 int r2 = load_operand(s2, sc2);
                 int rd = get_reg(dest);
 
@@ -556,7 +564,7 @@ void generate_assembly(void) {
                         }
                     }
                     if (collides) {
-                        target_reg = pick_scratch(i, (sc1 == sc2) ? sc1 : -1);
+                        target_reg = pick_scratch(i, r1, r2, rd);
                         /* pick_scratch may return sc1 or sc2; make sure
                            we get something distinct so the write lands
                            somewhere safe */
@@ -575,7 +583,7 @@ void generate_assembly(void) {
                     }
                 } else {
                     /* spilled dest — compute into a scratch then STORE */
-                    target_reg = pick_scratch(i, -1);
+                    target_reg = pick_scratch(i, r1, r2, -1);
                     if (target_reg == r1 || target_reg == r2) {
                         int r;
                         for (r = 1; r < NUM_REGS; r++) {
@@ -597,7 +605,7 @@ void generate_assembly(void) {
                 /* dest = src (copy or constant) */
                 emit("    ; %s", text);
                 sscanf(rest, "%63s", s1);
-                int sc = pick_scratch(i, -1);
+                int sc = pick_scratch(i, get_reg(dest), -1, -1);
                 int rs = load_operand(s1, sc);
                 int rd = get_reg(dest);
                 if (rd >= 0) {

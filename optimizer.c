@@ -766,8 +766,8 @@ static void fold_constant_conditions(void) {
     opt_len = j;
 }
 
-/* ---- PASS: loop-invariant code motion (end-of-pipeline, once) ---- */
-static void loop_invariant_motion(void) {
+/* ---- PASS: loop-invariant code motion (recursive) ---- */
+static int loop_invariant_motion(void) {
     find_jump_targets();
 
     int i;
@@ -837,9 +837,10 @@ static void loop_invariant_motion(void) {
             }
 
             stat_loop_inv++;
-            break;
+            return 1;
         }
     }
+    return 0;
 }
 
 /* ---- PASS: unreachable code elimination ---- */
@@ -948,6 +949,7 @@ void optimize(void) {
         int snap_stats = total_stats();
         int snap_len = opt_len;
 
+        common_subexpr_elim();
         constant_folding();
         algebraic_simplification();
         strength_reduction();
@@ -955,7 +957,6 @@ void optimize(void) {
         copy_propagation();
         constant_folding();           /* what prop exposed */
         algebraic_simplification();   /* what folding exposed */
-        common_subexpr_elim();
         global_constant_propagation();
         constant_folding();           /* what global prop exposed */
         fold_constant_conditions();   /* decide branches with numeric operands */
@@ -970,9 +971,8 @@ void optimize(void) {
         iteration++;
     }
 
-    /* loop-invariant motion runs once, outside the fixed point —
-       moving code shouldn't trigger another fold round. */
-    loop_invariant_motion();
+    /* loop-invariant motion runs repeatedly until no changes made */
+    while (loop_invariant_motion());
     unreachable_code_elim();
     dead_code_elim();
 }

@@ -198,7 +198,8 @@ static void print_phase2(void) {
 }
 
 static void print_phase3(void) {
-    int i, found = 0;
+    int found = 0;
+    SymEntry *e;
     printf("============================================================\n");
     printf("       PHASE 3: SEMANTIC ANALYSIS\n");
     printf("============================================================\n\n");
@@ -206,18 +207,14 @@ static void print_phase3(void) {
     printf("  Symbol Table (Declared Variables):\n");
     printf("  %-20s %-6s %-10s %-6s %-6s\n", "Name", "Type", "Line:Col", "Init", "Used");
     printf("  %-20s %-6s %-10s %-6s %-6s\n", "----", "----", "--------", "----", "----");
-    for (i = 0; i < SYM_SIZE; i++) {
-        SymEntry *e = sym_table[i];
-        while (e) {
-            char loc[32];
-            snprintf(loc, sizeof(loc), "%d:%d", e->decl_line, e->decl_col);
-            printf("  %-20s %-6s %-10s %-6s %-6s\n",
-                e->name, sym_type_str(e), loc,
-                e->is_initialized ? "yes" : "no",
-                e->is_used ? "yes" : "no");
-            e = e->next;
-            found++;
-        }
+    for (e = sym_all_entries(); e; e = e->all_next) {
+        char loc[32];
+        snprintf(loc, sizeof(loc), "%d:%d", e->decl_line, e->decl_col);
+        printf("  %-20s %-6s %-10s %-6s %-6s\n",
+            e->name, sym_type_str(e), loc,
+            e->is_initialized ? "yes" : "no",
+            e->is_used ? "yes" : "no");
+        found++;
     }
     if (!found) printf("  (none)\n");
     printf("\n  Total declared: %d variables\n\n", found);
@@ -234,21 +231,17 @@ static void print_phase3(void) {
     }
 
     /* warn about variables that were never read */
-    for (i = 0; i < SYM_SIZE; i++) {
-        SymEntry *e = sym_table[i];
-        while (e) {
-            if (e->decl_line > 0 && !e->is_used) {
-                if (e->is_initialized) {
-                    emit_diagnostic("<stdin>", e->decl_line, e->decl_col,
-                        "warning", "variable '%s' set but not used [-Wunused-but-set-variable]",
-                        e->name);
-                } else {
-                    emit_diagnostic("<stdin>", e->decl_line, e->decl_col,
-                        "warning", "unused variable '%s' [-Wunused-variable]",
-                        e->name);
-                }
+    for (e = sym_all_entries(); e; e = e->all_next) {
+        if (e->decl_line > 0 && !e->is_used) {
+            if (e->is_initialized) {
+                emit_diagnostic("<stdin>", e->decl_line, e->decl_col,
+                    "warning", "variable '%s' set but not used [-Wunused-but-set-variable]",
+                    e->name);
+            } else {
+                emit_diagnostic("<stdin>", e->decl_line, e->decl_col,
+                    "warning", "unused variable '%s' [-Wunused-variable]",
+                    e->name);
             }
-            e = e->next;
         }
     }
     printf("\n");

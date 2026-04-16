@@ -1,6 +1,8 @@
 #include "common.h"
 
 SymEntry *sym_table[SYM_SIZE];
+static SymEntry *all_symbols_head = NULL;
+static SymEntry *all_symbols_tail = NULL;
 
 /* current scope depth — 0 at start (file/global), bumped on each { */
 static int current_scope = 0;
@@ -30,7 +32,8 @@ void sym_pop_scope(void) {
             SymEntry *e = *pp;
             if (e->scope_level == current_scope) {
                 *pp = e->next;
-                free(e);
+                e->next = NULL;
+                e->is_active = 0;
             } else {
                 pp = &e->next;
             }
@@ -46,7 +49,9 @@ int sym_declare(const char *name, int line, int col) {
     unsigned h = sym_hash(name);
     SymEntry *e = sym_table[h];
     while (e) {
-        if (strcmp(e->name, name) == 0 && e->scope_level == current_scope)
+        if (e->is_active &&
+            strcmp(e->name, name) == 0 &&
+            e->scope_level == current_scope)
             return 1;
         e = e->next;
     }
@@ -59,8 +64,17 @@ int sym_declare(const char *name, int line, int col) {
     e->is_initialized = 0;
     e->is_used = 0;
     e->scope_level = current_scope;
+    e->all_next = NULL;
+    e->is_active = 1;
     e->next = sym_table[h];
     sym_table[h] = e;
+
+    if (all_symbols_tail) {
+        all_symbols_tail->all_next = e;
+    } else {
+        all_symbols_head = e;
+    }
+    all_symbols_tail = e;
     return 0;
 }
 
@@ -71,7 +85,9 @@ int sym_lookup(const char *name) {
     SymEntry *e = sym_table[h];
     int best = -1;
     while (e) {
-        if (strcmp(e->name, name) == 0 && e->scope_level > best)
+        if (e->is_active &&
+            strcmp(e->name, name) == 0 &&
+            e->scope_level > best)
             best = e->scope_level;
         e = e->next;
     }
@@ -83,13 +99,17 @@ SymEntry *sym_find(const char *name) {
     SymEntry *e = sym_table[h];
     SymEntry *best = NULL;
     while (e) {
-        if (strcmp(e->name, name) == 0) {
+        if (e->is_active && strcmp(e->name, name) == 0) {
             if (!best || e->scope_level > best->scope_level)
                 best = e;
         }
         e = e->next;
     }
     return best;
+}
+
+SymEntry *sym_all_entries(void) {
+    return all_symbols_head;
 }
 
 /* flags var as read; warns if never assigned */

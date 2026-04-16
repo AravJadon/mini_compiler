@@ -33,7 +33,9 @@ typedef struct SymEntry {
     int  is_initialized;
     int  is_used;
     int  scope_level;          /* 0 = file/global, 1 = function body, 2+ = nested blocks */
-    struct SymEntry *next;
+    struct SymEntry *next;     /* active hash-chain link */
+    struct SymEntry *all_next; /* declaration-order archive link */
+    int  is_active;
 } SymEntry;
 
 extern SymEntry *sym_table[SYM_SIZE];
@@ -43,6 +45,7 @@ int       sym_lookup(const char *name);
 SymEntry *sym_find(const char *name);
 SymEntry *sym_mark_used(const char *name, int line, int col);
 SymEntry *sym_mark_init(const char *name);
+SymEntry *sym_all_entries(void);
 const char *sym_type_str(SymEntry *e);
 
 /* scope stack helpers — each { pushes, each } pops.
