@@ -13,8 +13,8 @@
     int ival;
 }
 
-%token <sval> ID NUMBER STRING
-%token TYPE IF ELSE RETURN
+%token <sval> ID NUMBER STRING TYPE
+%token IF ELSE RETURN
 %token FOR WHILE DO SWITCH CASE DEFAULT BREAK CONTINUE
 %token PRINTF SCANF AMPER
 %token ASSIGN ADD_ASSIGN SUB_ASSIGN MUL_ASSIGN DIV_ASSIGN MOD_ASSIGN
@@ -58,12 +58,24 @@ external
 
 function_def
     : TYPE ID LPAREN opt_param_list RPAREN compound_stmt
-      { free($2); }
+      {
+          if (strcmp($1, "int") != 0) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "Unsupported data type '%s'. Toy-C only supports 'int'", $1);
+          }
+          free($1); free($2);
+      }
     ;
 
 function_proto
     : TYPE ID LPAREN opt_param_list RPAREN SEMI
-      { free($2); }
+      {
+          if (strcmp($1, "int") != 0) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "Unsupported data type '%s'. Toy-C only supports 'int'", $1);
+          }
+          free($1); free($2);
+      }
     ;
 
 opt_param_list
@@ -87,7 +99,11 @@ param_decl
                   emit_diagnostic("<stdin>", prev->decl_line, prev->decl_col,
                       "note", "previous definition of '%s' was here", $2);
           }
-          free($2);
+          if (strcmp($1, "int") != 0) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "Unsupported data type '%s'. Toy-C only supports 'int'", $1);
+          }
+          free($1); free($2);
       }
     ;
 
@@ -402,6 +418,13 @@ case_entry
 
 decl_stmt
     : TYPE decl_items
+      {
+          if (strcmp($1, "int") != 0) {
+              log_sem_error(@1.first_line, @1.first_column,
+                  "Unsupported data type '%s'. Toy-C only supports 'int'", $1);
+          }
+          free($1);
+      }
     ;
 
 decl_items
