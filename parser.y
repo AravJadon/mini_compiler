@@ -27,8 +27,8 @@
 
 %type <a> aexpr term factor
 %type <b> bexpr bor_expr band_expr bnot_expr bprimary rel_bool
-%type <ival> M sw_expr
-%type <list> N sw_dispatch
+%type <ival> M
+%type <list> N
 
 %nonassoc LOWER_THAN_ELSE
 %nonassoc ELSE
@@ -183,15 +183,6 @@ non_if_stmt
           if (@1.first_line != last_syntax_error_line) {
               log_syntax_error(@1.first_line, @1.first_column,
                   "expected expression before ';' token");
-              last_syntax_error_line = @1.first_line;
-          }
-          yyerrok;
-      }
-    | error RBRACE
-      {
-          if (@1.first_line != last_syntax_error_line) {
-              log_syntax_error(@1.first_line, @1.first_column,
-                  "expected expression before '}' token");
               last_syntax_error_line = @1.first_line;
           }
           yyerrok;
@@ -364,7 +355,7 @@ matched_stmt
           breaklist_push();
           continuelist_push();
       }
-      M matched_stmt
+      M statement %prec LOWER_THAN_ELSE
       {
           backpatch($4->truelist, $7);
           emit_goto($2);
@@ -390,7 +381,7 @@ matched_stmt
           breaklist_push();
           continuelist_push();
       }
-      statement WHILE M LPAREN bexpr RPAREN SEMI
+      statement %prec LOWER_THAN_ELSE WHILE M LPAREN bexpr RPAREN SEMI
       {
           backpatch($8->truelist, $2);
           int end_lbl = nextinstr();
@@ -413,20 +404,6 @@ unmatched_stmt
           backpatch($3->truelist, $5);
           backpatch($3->falselist, $9);
           backpatch($7, nextinstr());
-      }
-    | WHILE M LPAREN bexpr RPAREN
-      {
-          breaklist_push();
-          continuelist_push();
-      }
-      M unmatched_stmt
-      {
-          backpatch($4->truelist, $7);
-          emit_goto($2);
-          int end_lbl = nextinstr();
-          backpatch($4->falselist, end_lbl);
-          breaklist_pop(end_lbl);
-          continuelist_pop($2);
       }
     ;
 
@@ -841,24 +818,6 @@ factor
       {
           /* unary plus is a no-op, just pass through */
           $$ = $2;
-      }
-    | NOT factor
-      {
-          /* logical NOT in arithmetic context: !x becomes (x == 0 ? 1 : 0) */
-          char *t = new_temp();
-          int false_lbl = nextinstr();
-          emit_text("%s = 1", t);
-          char *cond = mkstr("%s != 0", $2->place);
-          int i = emit_if(cond);
-          free(cond);
-          int skip = emit_goto(-1);
-          int true_lbl = nextinstr();
-          emit_text("%s = 0", t);
-          int end_lbl = nextinstr();
-          patch_one(i, true_lbl);
-          patch_one(skip, end_lbl);
-          $$ = make_aattr(t);
-          free_aattr($2);
       }
     | ID
       {
